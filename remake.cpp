@@ -49,7 +49,7 @@ lies in the fact that they can be computed on the fly:
 @verbatim
 %.o : %.c
 	gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
-	read DEPS <$1.d
+	read DEPS < $1.d
 	remake ${DEPS#*:}
 	rm $1.d
 
@@ -99,6 +99,15 @@ Other differences with <b>make</b> and <b>redo</b>:
 - When executing shell scripts, positional variables <tt>$1</tt>,
   <tt>$2</tt>, etc, point to the target names of the rule obtained after
   substituting <tt>%</tt>. No other variables are defined.
+
+Limitations:
+
+- When the user or a script calls <b>remake</b>, the current working
+  directory should be the one containing <b>Remakefile</b> (and thus
+  <b>.remake</b> too). This is unavoidable for user calls, but could be
+  improved for recursive calls.
+- Target names are not yet normalized, so <tt>f</tt> and <tt>d/../f</tt>
+  are two different targets.
 
 @see http://cr.yp.to/redo.html for the philosophy of <b>redo</b> and
 https://github.com/apenwarr/redo for an implementation and some comprehensive documentation.
@@ -542,7 +551,7 @@ static void load_rules()
 					goto error;
 				current.generic = true;
 			}
-			else if (current.generic) goto error;
+			else if (state == Tgt && current.generic) goto error;
 			if (state != Dep)
 			{
 				current.targets.push_back(file);
@@ -575,8 +584,8 @@ static void substitute_pattern(std::string const &pat, string_list const &src, s
 	     i_end = src.end(); i != i_end; ++i)
 	{
 		size_t pos = i->find('%');
-		assert(pos != std::string::npos);
-		dst.push_back(i->substr(0, pos) + pat + i->substr(pos + 1));
+		if (pos == std::string::npos)dst.push_back(*i);
+		else dst.push_back(i->substr(0, pos) + pat + i->substr(pos + 1));
 	}
 }
 
@@ -658,6 +667,16 @@ static status_t const &get_status(std::string const &target)
 }
 
 /**
+ * Post a job status to the thread pipe.
+ */
+static void post_job_completion(int job_id, bool success)
+{
+	int res[2] = { job_id, success ? 1 : 0 };
+	ssize_t sz = write(thread_fd_in, &res, sizeof(res));
+	assert(sz == sizeof(res));
+}
+
+/**
  * Fork a shell process to execute the given rule script.
  * @note This function is not called from the main thread, so it only
  *       accesses immutable or private data.
@@ -670,9 +689,7 @@ static void *job_handler(void *data_p)
 		int ret = 0;
 		if (pid >= 0 && waitpid(pid, &ret, 0) == pid)
 			ret = WIFEXITED(ret) && WEXITSTATUS(ret) == 0;
-		int res[2] = { data->job_id, ret };
-		ssize_t sz = write(thread_fd_in, &res, sizeof(res));
-		assert(sz == sizeof(res));
+		post_job_completion(data->job_id, ret);
 		delete data;
 		return NULL;
 	}
@@ -702,6 +719,7 @@ static void *job_handler(void *data_p)
  */
 static void run_script(int job_id, rule_t const &rule)
 {
+	DEBUG_open << "Starting script for job " << job_id << "... ";
 	pthread_t thread;
 	pthread_attr_t attr;
 	pthread_attr_init(&attr);
@@ -714,9 +732,8 @@ static void run_script(int job_id, rule_t const &rule)
 	++running_threads;
 	int ret = pthread_create(&thread, &attr, &job_handler, data);
 	if (!ret) return;
-	int res[2] = { job_id, 0 };
-	ssize_t sz = write(thread_fd_in, &res, sizeof(res));
-	assert(sz == sizeof(res));
+	post_job_completion(job_id, false);
+	DEBUG_close << "failed\n";
 }
 
 /**
@@ -758,32 +775,22 @@ static bool start(std::string const &target, client_list::iterator &current)
 }
 
 /**
- * Mark targets as failed and remove the files.
- */
-static void mark_failure(string_list const &targets)
-{
-	std::cerr << "Failed to build";
-	for (string_list::const_iterator i = targets.begin(),
-	     i_end = targets.end(); i != i_end; ++i)
-	{
-		status[*i].status = Failed;
-		std::cerr << ' ' << *i;
-		remove(i->c_str());
-	}
-	std::cerr << std::endl;
-}
-
-/**
  * Send a reply to a client then remove it.
  * If the client was a dependency client, start the actual script.
  */
 static void complete_request(client_t &client, bool success)
 {
+	DEBUG_open << "Completing request from client of job " << client.job_id << "... ";
 	if (client.delayed)
 	{
 		assert(client.fd < 0);
-		if (success) run_script(client.job_id, *client.delayed);
-		else mark_failure(client.delayed->targets);
+		if (success)
+			run_script(client.job_id, *client.delayed);
+		else
+		{
+			++running_threads;
+			post_job_completion(client.job_id, false);
+		}
 		delete client.delayed;
 	}
 	else if (client.fd >= 0)
@@ -817,10 +824,10 @@ static void update_clients()
 {
 	DEBUG_open << "Updating clients... ";
 	for (client_list::iterator i = clients.begin(), i_next = i,
-	     i_end = clients.end(); i != i_end; i = i_next)
+	     i_end = clients.end(); i != i_end && has_free_slots(); i = i_next)
 	{
 		++i_next;
-		DEBUG_open << "Handling job " << i->job_id << "... ";
+		DEBUG_open << "Handling client from job " << i->job_id << "... ";
 		if (false)
 		{
 			failed:
@@ -879,6 +886,7 @@ static void update_clients()
 		}
 
 		// Try to complete request.
+		// (This might start a new job if it was a dependency client.)
 		if (i->running.empty())
 		{
 			complete_request(*i, true);
@@ -953,7 +961,15 @@ static void finalize_job()
 	else
 	{
 		DEBUG_close << "failed\n";
-		mark_failure(targets);
+		std::cerr << "Failed to build";
+		for (string_list::const_iterator j = targets.begin(),
+		     j_end = targets.end(); j != j_end; ++j)
+		{
+			status[*j].status = Failed;
+			std::cerr << ' ' << *j;
+			remove(j->c_str());
+		}
+		std::cerr << std::endl;
 	}
 	running_targets.erase(i);
 	--running_threads;
@@ -1044,7 +1060,7 @@ void server_loop()
 {
 	while (true)
 	{
-		if (has_free_slots()) update_clients();
+		update_clients();
 		if (running_threads == 0)
 		{
 			assert(clients.empty());
