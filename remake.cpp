@@ -134,6 +134,7 @@ GNU General Public License for more details.
 #include <set>
 #include <sstream>
 #include <string>
+#include <vector>
 #include <cassert>
 #include <cstdlib>
 #include <ctime>
@@ -955,11 +956,8 @@ void accept_client()
 	DEBUG_open << "Handling client request... ";
 
 	// Accept connection.
-	struct sockaddr_un remote;
-	socklen_t len = sizeof(remote);
-	int fd = accept4(socket_fd, (struct sockaddr *)&remote, &len, SOCK_CLOEXEC);
+	int fd = accept4(socket_fd, NULL, NULL, SOCK_CLOEXEC);
 	if (fd < 0) return;
-
 	clients.push_front(client_t());
 	client_list::iterator proc = clients.begin();
 
@@ -973,38 +971,31 @@ void accept_client()
 		return;
 	}
 
-	// Receive job that spawned the client.
+	// Receive message. Stop when encountering two nuls in a row.
+	std::vector<char> buf;
+	size_t len = 0;
+	while (len < sizeof(int) + 2 || buf[len - 1] || buf[len - 2])
+	{
+		buf.resize(len + 1024);
+		ssize_t l = recv(fd, &buf[0] + len, 1024, 0);
+		if (l <= 0) goto error;
+		len += l;
+	}
+
+	// Parse job that spawned the client.
 	int job_id;
-	if (recv(fd, &job_id, sizeof(job_id), 0) != sizeof(job_id))
-		goto error;
+	memcpy(&job_id, &buf[0], sizeof(int));
 	proc->job_id = job_id;
 	proc->fd = fd;
 	job_targets_map::const_iterator i = job_targets.find(job_id);
 	if (i == job_targets.end()) goto error;
 	DEBUG << "receiving request from job " << job_id << std::endl;
 
-	// Receive targets the client wants to build.
-	std::ostringstream tbuf;
+	// Parse the targets and mark them as dependencies from the job targets.
+	char const *p = &buf[0] + sizeof(int);
 	while (true)
 	{
-		char buf[1024];
-		ssize_t len = recv(fd, &buf, 1024, 0);
-		if (len <= 0) goto error;
-		tbuf.write(buf, len);
-		if (buf[len - 1] == 0)
-		{
-			std::string const &targets = tbuf.str();
-			size_t len = targets.length();
-			if (len >= 2 && targets[len - 2] == 0) break;
-		}
-	}
-
-	// Parse the targets and mark them as dependencies from the job targets.
-	std::string const &targets = tbuf.str();
-	char const *p = targets.c_str(), *p_end = p + targets.length() + 1;
-	while (p != p_end)
-	{
-		size_t len = strlen(p);
+		len = strlen(p);
 		if (len == 0)
 		{
 			++waiting_jobs;
@@ -1021,7 +1012,6 @@ void accept_client()
 		}
 		p += len + 1;
 	}
-	goto error;
 }
 
 /**
