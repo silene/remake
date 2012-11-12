@@ -137,8 +137,8 @@ GNU General Public License for more details.
 #include <cassert>
 #include <cstdlib>
 #include <ctime>
+#include <errno.h>
 #include <fcntl.h>
-#include <pthread.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -188,7 +188,9 @@ struct rule_t
 
 typedef std::list<rule_t> rule_list;
 
-typedef std::map<int, string_list> running_target_map;
+typedef std::map<int, string_list> job_targets_map;
+
+typedef std::map<pid_t, int> pid_job_map;
 
 /**
  * Client waiting for a request complete.
@@ -216,16 +218,6 @@ struct client_t
 typedef std::list<client_t> client_list;
 
 /**
- * Short-lived data for creating a job handler.
- */
-struct thread_data
-{
-	int job_id;
-	string_list targets;
-	std::string script;
-};
-
-/**
  * Map from targets to their known dependencies.
  */
 static dependency_map deps;
@@ -243,7 +235,12 @@ static rule_list rules;
 /**
  * Map from jobs to targets being built.
  */
-static running_target_map running_targets;
+static job_targets_map job_targets;
+
+/**
+ * Map from jobs to shell pids.
+ */
+static pid_job_map job_pids;
 
 /**
  * List of clients waiting for a request to complete.
@@ -255,36 +252,39 @@ static client_list clients;
  * Maximum number of parallel jobs (non-positive if unbounded).
  * Can be modified by the -j option.
  */
-static int max_active_threads = 1;
+static int max_active_jobs = 1;
 
 /**
- * Number of threads currently running:
- * - it increases when a thread is created in #run_script,
+ * Number of jobs currently running:
+ * - it increases when a process is created in #run_script,
  * - it decreases when a completion message is received in #finalize_job.
  *
- * @note There might be some threads running while #clients is empty.
+ * @note There might be some jobs running while #clients is empty.
  *       Indeed, if a client requested two targets to be rebuilt, if they
  *       are running concurrently, if one of them fails, the client will
  *       get a failure notice and might terminate before the other target
  *       finishes.
  */
-static int running_threads = 0;
+static int running_jobs = 0;
 
 /**
- * Number of threads currently waiting for a build request to finish:
+ * Number of jobs currently waiting for a build request to finish:
  * - it increases when a build request is received in #accept_client
  *   (since the client is presumably waiting for the reply),
  * - it decreases when a reply is sent in #complete_request.
  */
-static int waiting_threads = 0;
+static int waiting_jobs = 0;
 
 /**
- * Global counter used as a job number to recover job targets.
- * @see running_targets
+ * Global counter used to produce increasing job numbers.
+ * @see job_targets
  */
 static int job_counter = 0;
 
-static int socket_fd, thread_fd_in, thread_fd_out;
+/**
+ * Socket on which the server listens for client request.
+ */
+static int socket_fd;
 
 /**
  * Whether the request of an original client failed.
@@ -295,6 +295,8 @@ static bool build_failure;
  * Name of the server socket in the file system.
  */
 static char *socket_name;
+
+static volatile sig_atomic_t got_SIGCHLD = 0;
 
 struct log
 {
@@ -667,51 +669,41 @@ static status_t const &get_status(std::string const &target)
 }
 
 /**
- * Post a job status to the thread pipe.
+ * Handle job completion.
  */
-static void post_job_completion(int job_id, bool success)
+static void complete_job(int job_id, bool success)
 {
-	int res[2] = { job_id, success ? 1 : 0 };
-	ssize_t sz = write(thread_fd_in, &res, sizeof(res));
-	assert(sz == sizeof(res));
+	DEBUG_open << "Completing job " << job_id << "... ";
+	job_targets_map::iterator i = job_targets.find(job_id);
+	assert(i != job_targets.end());
+	string_list const &targets = i->second;
+	if (success)
+	{
+		for (string_list::const_iterator j = targets.begin(),
+		     j_end = targets.end(); j != j_end; ++j)
+		{
+			status[*j].status = Remade;
+		}
+	}
+	else
+	{
+		DEBUG_close << "failed\n";
+		std::cerr << "Failed to build";
+		for (string_list::const_iterator j = targets.begin(),
+		     j_end = targets.end(); j != j_end; ++j)
+		{
+			status[*j].status = Failed;
+			std::cerr << ' ' << *j;
+			remove(j->c_str());
+		}
+		std::cerr << std::endl;
+	}
+	job_targets.erase(i);
 }
 
-/**
- * Fork a shell process to execute the given rule script.
- * @note This function is not called from the main thread, so it only
- *       accesses immutable or private data.
- */
-static void *job_handler(void *data_p)
+static void child_sig_handler(int sig)
 {
-	thread_data *data = (thread_data *)data_p;
-	if (pid_t pid = fork())
-	{
-		int ret = 0;
-		if (pid >= 0 && waitpid(pid, &ret, 0) == pid)
-			ret = WIFEXITED(ret) && WEXITSTATUS(ret) == 0;
-		post_job_completion(data->job_id, ret);
-		delete data;
-		return NULL;
-	}
-	std::ostringstream buf;
-	buf << data->job_id;
-	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
-		_exit(1);
-	char const **argv = new const char *[6 + data->targets.size()];
-	argv[0] = "sh";
-	argv[1] = "-e";
-	argv[2] = "-c";
-	argv[3] = data->script.c_str();
-	argv[4] = "remake-shell";
-	int num = 5;
-	for (string_list::const_iterator i = data->targets.begin(),
-	     i_end = data->targets.end(); i != i_end; ++i, ++num)
-	{
-		argv[num] = i->c_str();
-	}
-	argv[num] = NULL;
-	execv("/bin/sh", (char **)argv);
-	_exit(1);
+	got_SIGCHLD = 1;
 }
 
 /**
@@ -720,20 +712,37 @@ static void *job_handler(void *data_p)
 static void run_script(int job_id, rule_t const &rule)
 {
 	DEBUG_open << "Starting script for job " << job_id << "... ";
-	pthread_t thread;
-	pthread_attr_t attr;
-	pthread_attr_init(&attr);
-	pthread_attr_setstacksize(&attr, 16384);
-	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	thread_data *data = new thread_data;
-	data->job_id = job_id;
-	data->targets = rule.targets;
-	data->script = rule.script;
-	++running_threads;
-	int ret = pthread_create(&thread, &attr, &job_handler, data);
-	if (!ret) return;
-	post_job_completion(job_id, false);
-	DEBUG_close << "failed\n";
+	if (pid_t pid = fork())
+	{
+		if (pid == -1)
+		{
+			DEBUG_close << "failed\n";
+			complete_job(job_id, false);
+			return;
+		}
+		++running_jobs;
+		job_pids[pid] = job_id;
+		return;
+	}
+	std::ostringstream buf;
+	buf << job_id;
+	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
+		_exit(1);
+	char const **argv = new char const *[6 + rule.targets.size()];
+	argv[0] = "sh";
+	argv[1] = "-e";
+	argv[2] = "-c";
+	argv[3] = rule.script.c_str();
+	argv[4] = "remake-shell";
+	int num = 5;
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i, ++num)
+	{
+		argv[num] = i->c_str();
+	}
+	argv[num] = NULL;
+	execv("/bin/sh", (char **)argv);
+	_exit(1);
 }
 
 /**
@@ -769,7 +778,7 @@ static bool start(std::string const &target, client_list::iterator &current)
 		current->delayed = new rule_t(rule);
 	}
 	else run_script(job_counter, rule);
-	running_targets[job_counter] = rule.targets;
+	job_targets[job_counter] = rule.targets;
 	++job_counter;
 	return true;
 }
@@ -784,13 +793,8 @@ static void complete_request(client_t &client, bool success)
 	if (client.delayed)
 	{
 		assert(client.fd < 0);
-		if (success)
-			run_script(client.job_id, *client.delayed);
-		else
-		{
-			++running_threads;
-			post_job_completion(client.job_id, false);
-		}
+		if (success) run_script(client.job_id, *client.delayed);
+		else complete_job(client.job_id, false);
 		delete client.delayed;
 	}
 	else if (client.fd >= 0)
@@ -798,7 +802,7 @@ static void complete_request(client_t &client, bool success)
 		char res = success ? 1 : 0;
 		send(client.fd, &res, 1, 0);
 		close(client.fd);
-		--waiting_threads;
+		--waiting_jobs;
 	}
 
 	if (client.job_id < 0 && !success) build_failure = true;
@@ -809,8 +813,8 @@ static void complete_request(client_t &client, bool success)
  */
 static bool has_free_slots()
 {
-	if (max_active_threads <= 0) return true;
-	return running_threads - waiting_threads < max_active_threads;
+	if (max_active_jobs <= 0) return true;
+	return running_jobs - waiting_jobs < max_active_jobs;
 }
 
 /**
@@ -897,27 +901,31 @@ static void update_clients()
 }
 
 /**
- * Create a named unix socket that listens for build requests and a pipe
- * for threads to post the exit status of job scripts. Also set the
- * REMAKE_SOCKET environment variable that will be inherited by all the
- * job scripts.
+ * Create a named unix socket that listens for build requests. Also set
+ * the REMAKE_SOCKET environment variable that will be inherited by all
+ * the job scripts.
  */
 static void create_server()
 {
 	if (false)
 	{
 		error:
-		perror("Failed to create server socket");
+		perror("Failed to create server");
 		error2:
 		exit(1);
 	}
 	DEBUG_open << "Creating server... ";
 
-	// Create the thread pipe.
-	int fds[2];
-	if (pipe2(fds, O_CLOEXEC)) goto error;
-	thread_fd_in = fds[1];
-	thread_fd_out = fds[0];
+	// Set a handler for SIGCHLD then block the signal (unblocked during select).
+	sigset_t sigmask;
+	sigemptyset(&sigmask);
+	sigaddset(&sigmask, SIGCHLD);
+	if (sigprocmask(SIG_BLOCK, &sigmask, NULL) == -1) goto error;
+	struct sigaction sa;
+	sa.sa_flags = 0;
+	sa.sa_handler = &child_sig_handler;
+	sigemptyset(&sa.sa_mask);
+	if (sigaction(SIGCHLD, &sa, NULL) == -1) goto error;
 
 	// Prepare a named unix socket in temporary directory.
 	socket_name = tempnam(NULL, "rmk-");
@@ -936,43 +944,6 @@ static void create_server()
 	if (bind(socket_fd, (struct sockaddr *)&socket_addr, len))
 		goto error;
 	if (listen(socket_fd, 1000)) goto error;
-}
-
-/**
- * Handle job completion coming from threads.
- */
-static void finalize_job()
-{
-	DEBUG_open << "Handling job completion... ";
-	int res[2];
-	ssize_t sz = read(thread_fd_out, &res, sizeof(res));
-	assert(sz == sizeof(res));
-	running_target_map::iterator i = running_targets.find(res[0]);
-	assert(i != running_targets.end());
-	string_list const &targets = i->second;
-	if (res[1])
-	{
-		for (string_list::const_iterator j = targets.begin(),
-		     j_end = targets.end(); j != j_end; ++j)
-		{
-			status[*j].status = Remade;
-		}
-	}
-	else
-	{
-		DEBUG_close << "failed\n";
-		std::cerr << "Failed to build";
-		for (string_list::const_iterator j = targets.begin(),
-		     j_end = targets.end(); j != j_end; ++j)
-		{
-			status[*j].status = Failed;
-			std::cerr << ' ' << *j;
-			remove(j->c_str());
-		}
-		std::cerr << std::endl;
-	}
-	running_targets.erase(i);
-	--running_threads;
 }
 
 /**
@@ -1008,8 +979,8 @@ void accept_client()
 		goto error;
 	proc->job_id = job_id;
 	proc->fd = fd;
-	running_target_map::const_iterator i = running_targets.find(job_id);
-	if (i == running_targets.end()) goto error;
+	job_targets_map::const_iterator i = job_targets.find(job_id);
+	if (i == job_targets.end()) goto error;
 	DEBUG << "receiving request from job " << job_id << std::endl;
 
 	// Receive targets the client wants to build.
@@ -1036,13 +1007,13 @@ void accept_client()
 		size_t len = strlen(p);
 		if (len == 0)
 		{
-			++waiting_threads;
+			++waiting_jobs;
 			return;
 		}
 		std::string target(p, p + len);
 		DEBUG << "adding dependency " << target << " to job\n";
 		proc->pending.push_back(target);
-		string_list const &l = running_targets[job_id];
+		string_list const &l = job_targets[job_id];
 		for (string_list::const_iterator i = l.begin(),
 		     i_end = l.end(); i != i_end; ++i)
 		{
@@ -1054,28 +1025,40 @@ void accept_client()
 }
 
 /**
- * Loop until all the threads have finished.
+ * Loop until all the jobs have finished.
  */
 void server_loop()
 {
 	while (true)
 	{
 		update_clients();
-		if (running_threads == 0)
+		if (running_jobs == 0)
 		{
 			assert(clients.empty());
 			break;
 		}
 		DEBUG_open << "Handling events... ";
+		sigset_t emptymask;
+		sigemptyset(&emptymask);
 		fd_set fdset;
 		FD_ZERO(&fdset);
 		FD_SET(socket_fd, &fdset);
-		FD_SET(thread_fd_out, &fdset);
-		int max_fd = std::max(socket_fd, thread_fd_out);
-		if (select(max_fd + 1, &fdset, NULL, NULL, NULL) == -1)
-			continue;
-		if (FD_ISSET(thread_fd_out, &fdset)) finalize_job();
-		if (FD_ISSET(socket_fd, &fdset)) accept_client();
+		int ret = pselect(socket_fd + 1, &fdset, NULL, NULL, NULL, &emptymask);
+		if (ret > 0 /* && FD_ISSET(socket_fd, &fdset)*/) accept_client();
+		if (!got_SIGCHLD) continue;
+		got_SIGCHLD = 0;
+		pid_t pid;
+		int status;
+		while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
+		{
+			bool res = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+			pid_job_map::iterator i = job_pids.find(pid);
+			assert(i != job_pids.end());
+			int job_id = i->second;
+			job_pids.erase(i);
+			--running_jobs;
+			complete_job(job_id, res);
+		}
 	}
 }
 
@@ -1195,9 +1178,9 @@ int main(int argc, char *argv[])
 		if (arg == "-d")
 			debug.active = true;
 		else if (arg.compare(0, 2, "-j") == 0)
-			max_active_threads = atoi(arg.c_str() + 2);
+			max_active_jobs = atoi(arg.c_str() + 2);
 		else if (arg.compare(0, 7, "--jobs=") == 0)
-			max_active_threads = atoi(arg.c_str() + 7);
+			max_active_jobs = atoi(arg.c_str() + 7);
 		else
 		{
 			if (arg[0] == '-') usage(1);
