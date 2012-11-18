@@ -1,16 +1,14 @@
-Remake, a build system that bridges the gap between make and redo.
-==========================================================
+Remake, a build system that bridges the gap between make and redo
+=================================================================
 
 As with <b>make</b>, <b>remake</b> uses a centralized rule file, which is
 named <b>Remakefile</b>. It contains rules with a <em>make</em>-like
 syntax:
 
-<pre>
-target1 target2 ... : dependency1 dependency2 ...
-	shell script
-	that builds
-	the targets
-</pre>
+	target1 target2 ... : dependency1 dependency2 ...
+		shell script
+		that builds
+		the targets
 
 A target is known to be up-to-date if all its dependencies are. If it
 has no known dependencies yet the file already exits, it is assumed to
@@ -30,14 +28,12 @@ dynamic call to <b>remake</b> is executed.
 
 In other words, the following two rules have almost the same behavior.
 
-<pre>
-target1 target2 ... : dependency1 dependency2 ...
-	shell script
+	target1 target2 ... : dependency1 dependency2 ...
+		shell script
 
-target1 target2 ... :
-	remake dependency1 dependency2 ...
-	shell script
-</pre>
+	target1 target2 ... :
+		remake dependency1 dependency2 ...
+		shell script
 
 (There is a difference if the targets already exist, have never been
 built before, and the dependencies are either younger or obsolete, since
