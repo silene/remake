@@ -46,17 +46,15 @@ the targets will not be rebuilt in the second case.)
 The above usage of dynamic dependencies is hardly useful. Their strength
 lies in the fact that they can be computed on the fly:
 
-<pre>
-%.o : %.c
-	gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
-	read DEPS < $1.d
-	remake ${DEPS#*:}
-	rm $1.d
+	%.o : %.c
+		gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
+		read DEPS < $1.d
+		remake ${DEPS#*:}
+		rm $1.d
 
-%.cmo : %.ml
-	remake $(ocamldep ${1%.cmo}.ml | sed -n -e "\\,^.*: *\$, b; \\,$1:, { b feed2; :feed1 N; :feed2 s/[\\]\$//; t feed1; s/.*://; s/[ \\t\\r\\n]*\\([ \\t\\r\\n]\\+\\)/\\1\n/g; s/\\n\$//; p; q}")
-	ocamlc -c ${1%.cmo}.ml
-</pre>
+	%.cmo : %.ml
+		remake $(ocamldep ${1%.cmo}.ml | sed -n -e "\\,^.*: *\$, b; \\,$1:, { b feed2; :feed1 N; :feed2 s/[\\]\$//; t feed1; s/.*://; s/[ \\t\\r\\n]*\\([ \\t\\r\\n]\\+\\)/\\1\n/g; s/\\n\$//; p; q}")
+		ocamlc -c ${1%.cmo}.ml
 
 Note that the first rule fails if any of the header files included by
 a C source file has to be automatically generated. In that case, one
