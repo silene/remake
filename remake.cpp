@@ -846,35 +846,48 @@ static void child_sig_handler(int sig)
 static void run_script(int job_id, rule_t const &rule)
 {
 	DEBUG_open << "Starting script for job " << job_id << "... ";
+	int pfd[2];
+	if (pipe(pfd) == -1)
+	{
+		error:
+		DEBUG_close << "failed\n";
+		complete_job(job_id, false);
+		return;
+	}
 	if (pid_t pid = fork())
 	{
-		if (pid == -1)
-		{
-			DEBUG_close << "failed\n";
-			complete_job(job_id, false);
-			return;
-		}
+		if (pid == -1) goto error;
+		ssize_t len = rule.script.length();
+		if (write(pfd[1], rule.script.c_str(), len) < len)
+			goto error;
+		close(pfd[0]);
+		close(pfd[1]);
 		++running_jobs;
 		job_pids[pid] = job_id;
 		return;
 	}
+	// Child process starts here.
 	std::ostringstream buf;
 	buf << job_id;
 	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
 		_exit(1);
-	char const **argv = new char const *[6 + rule.targets.size()];
+	char const **argv = new char const *[4 + rule.targets.size()];
 	argv[0] = "sh";
 	argv[1] = "-e";
-	argv[2] = "-c";
-	argv[3] = rule.script.c_str();
-	argv[4] = "remake-shell";
-	int num = 5;
+	argv[2] = "-s";
+	int num = 3;
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i, ++num)
 	{
 		argv[num] = i->c_str();
 	}
 	argv[num] = NULL;
+	if (pfd[0] != 0)
+	{
+		dup2(pfd[0], 0);
+		close(pfd[0]);
+	}
+	close(pfd[1]);
 	execv("/bin/sh", (char **)argv);
 	_exit(1);
 }
