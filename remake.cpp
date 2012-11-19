@@ -152,6 +152,8 @@ typedef std::set<std::string> string_set;
 
 typedef std::map<std::string, string_set> dependency_map;
 
+typedef std::map<std::string, string_list> variable_map;
+
 /**
  * Build status of a target.
  */
@@ -217,6 +219,11 @@ struct client_t
 };
 
 typedef std::list<client_t> client_list;
+
+/**
+ * Map from variable names to their content.
+ */
+static variable_map variables;
 
 /**
  * Map from targets to their known dependencies.
@@ -392,7 +399,7 @@ static void skip_eol(std::istream &in)
 	if (in.good()) in.putback(c);
 }
 
-enum token_e { Word, Eol, Eof, Colon, Equal };
+enum token_e { Word, Eol, Eof, Colon, Equal, Dollar, Rightpar };
 
 /**
  * Skip spaces and return the kind of the next token.
@@ -406,25 +413,25 @@ static token_e next_token(std::istream &in)
 		if (!in.good()) return Eof;
 		switch (c)
 		{
-			case ':':
-				return Colon;
-			case '=':
-				return Equal;
-			case '\r':
-			case '\n':
-				return Eol;
-			case '\\':
-				in.ignore(1);
-				c = in.peek();
-				if (c != '\r' && c != '\n')
-				{
-					in.putback('\\');
-					return Word;
-				}
-				skip_eol(in);
-				break;
-			default:
+		case ':': return Colon;
+		case '=': return Equal;
+		case '$': return Dollar;
+		case ')': return Rightpar;
+		case '\r':
+		case '\n':
+			return Eol;
+		case '\\':
+			in.ignore(1);
+			c = in.peek();
+			if (c != '\r' && c != '\n')
+			{
+				in.putback('\\');
 				return Word;
+			}
+			skip_eol(in);
+			break;
+		default:
+			return Word;
 		}
 	}
 }
@@ -437,13 +444,17 @@ static std::string read_word(std::istream &in)
 	int c = in.get();
 	std::string res;
 	if (!in.good()) return res;
-	if (strchr(" \t\r\n:", c))
-	{
-		in.putback(c);
-		return res;
-	}
+	char const *separators = " \t\r\n:$(),=\"";
 	bool quoted = c == '"';
-	if (!quoted) res += c;
+	if (!quoted)
+	{
+		if (strchr(separators, c))
+		{
+			in.putback(c);
+			return res;
+		}
+		res += c;
+	}
 	while (true)
 	{
 		c = in.get();
@@ -459,7 +470,7 @@ static std::string read_word(std::istream &in)
 		}
 		else
 		{
-			if (strchr(" \t\r\n:,", c))
+			if (strchr(separators, c))
 			{
 				in.putback(c);
 				return res;
@@ -469,21 +480,59 @@ static std::string read_word(std::istream &in)
 	}
 }
 
+static string_list read_words(std::istream &in);
+
 /**
- * Read a list of words.
+ * Execute a built-in function @a name and append its result to @a dest.
+ */
+static void execute_function(std::istream &in, std::string const &name, string_list &dest)
+{
+	if (false)
+	{
+		error:
+		std::cerr << "Failed to load rules: syntax error" << std::endl;
+		exit(1);
+	}
+	goto error;
+}
+
+/**
+ * Read a list of words, possibly executing functions.
  */
 static string_list read_words(std::istream &in)
 {
+	if (false)
+	{
+		error:
+		std::cerr << "Failed to load rules: syntax error" << std::endl;
+		exit(1);
+	}
 	string_list res;
 	while (true)
 	{
 		switch (next_token(in))
 		{
-			case Word:
-				res.push_back(read_word(in));
-				break;
-			default:
-				return res;
+		case Word:
+			res.push_back(read_word(in));
+			break;
+		case Dollar:
+		{
+			in.ignore(1);
+			if (in.get() != '(') goto error;
+			std::string name = read_word(in);
+			if (name.empty()) goto error;
+			token_e tok = next_token(in);
+			if (tok == Rightpar)
+			{
+				in.ignore(1);
+				variable_map::const_iterator i = variables.find(name);
+				if (i != variables.end())
+					res.insert(res.end(), i->second.begin(), i->second.end());
+			}
+			else execute_function(in, name, res);
+		}
+		default:
+			return res;
 		}
 	}
 }
@@ -540,7 +589,8 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 	// Read targets and check genericity.
 	string_list targets = read_words(in);
 	if (!first.empty()) targets.push_front(first);
-	if (targets.empty()) goto error;
+	else if (targets.empty()) goto error;
+	else DEBUG << "actual target: " << targets.front() << std::endl;
 	for (string_list::const_iterator i = targets.begin(),
 	     i_end = targets.end(); i != i_end; ++i)
 	{
@@ -552,6 +602,7 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 		}
 	}
 	std::swap(rule.targets, targets);
+	skip_spaces(in);
 	if (in.get() != ':') goto error;
 
 	// Read dependencies and mark them as such if targets are specific.
@@ -564,6 +615,7 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 			deps[*i].insert(rule.deps.begin(), rule.deps.end());
 		}
 	}
+	skip_spaces(in);
 	char c = in.get();
 	if (c != '\r' && c != '\n') goto error;
 	skip_eol(in);
@@ -640,8 +692,22 @@ static void load_rules()
 		}
 		if (c == ' ' || c == '\t') goto error;
 		token_e tok = next_token(in);
-		if (tok != Word) goto error;
-		rules.push_back(read_rule(in, read_word(in)));
+		if (tok == Word)
+		{
+			std::string name = read_word(in);
+			if (name.empty()) goto error;
+			if (next_token(in) == Equal)
+			{
+				in.ignore(1);
+				DEBUG << "Assignment to variable " << name << std::endl;
+				variables[name] = read_words(in);
+				skip_eol(in);
+			}
+			else rules.push_back(read_rule(in, name));
+		}
+		else if (tok == Dollar)
+			rules.push_back(read_rule(in, std::string()));
+		else goto error;
 	}
 }
 
@@ -1136,6 +1202,7 @@ void server_mode(string_list const &targets)
 		clients.back().pending.push_back("Remakefile");
 		server_loop();
 		if (build_failure) goto early_exit;
+		variables.clear();
 		rules.clear();
 		load_rules();
 	}
