@@ -350,17 +350,22 @@ struct log_auto_close
  */
 static std::string escape_string(std::string const &s)
 {
+	char const *quoted_char = ",: '";
+	char const *escaped_char = "\"\\$!";
+	bool need_quotes = true;
 	size_t len = s.length(), nb = len;
 	for (size_t i = 0; i < len; ++i)
 	{
-		if (strchr("\" \\$!", s[i])) ++nb;
+		if (strchr(quoted_char, s[i])) need_quotes = true;
+		if (strchr(escaped_char, s[i])) ++nb;
 	}
-	if (nb == len) return s;
+	if (nb != len) need_quotes = true;
+	if (need_quotes) return s;
 	std::string t(nb + 2, '\\');
 	t[0] = '"';
 	for (size_t i = 0, j = 1; i < len; ++i, ++j)
 	{
-		if (strchr("\" \\$!", s[i])) ++j;
+		if (strchr(escaped_char, s[i])) ++j;
 		t[j] = s[i];
 	}
 	t[nb + 1] = '"';
@@ -373,7 +378,7 @@ static std::string escape_string(std::string const &s)
 static void skip_spaces(std::istream &in)
 {
 	char c;
-	while ((c = in.get()) == ' ') {}
+	while (strchr(" \t", (c = in.get()))) {}
 	if (in.good()) in.putback(c);
 }
 
@@ -385,6 +390,43 @@ static void skip_eol(std::istream &in)
 	char c;
 	while (strchr("\r\n", (c = in.get()))) {}
 	if (in.good()) in.putback(c);
+}
+
+enum token_e { Word, Eol, Eof, Colon, Equal };
+
+/**
+ * Skip spaces and return the kind of the next token.
+ */
+static token_e next_token(std::istream &in)
+{
+	while (true)
+	{
+		skip_spaces(in);
+		char c = in.peek();
+		if (!in.good()) return Eof;
+		switch (c)
+		{
+			case ':':
+				return Colon;
+			case '=':
+				return Equal;
+			case '\r':
+			case '\n':
+				return Eol;
+			case '\\':
+				in.ignore(1);
+				c = in.peek();
+				if (c != '\r' && c != '\n')
+				{
+					in.putback('\\');
+					return Word;
+				}
+				skip_eol(in);
+				break;
+			default:
+				return Word;
+		}
+	}
 }
 
 /**
@@ -417,12 +459,31 @@ static std::string read_word(std::istream &in)
 		}
 		else
 		{
-			if (strchr(" \t\r\n:", c))
+			if (strchr(" \t\r\n:,", c))
 			{
 				in.putback(c);
 				return res;
 			}
 			res += c;
+		}
+	}
+}
+
+/**
+ * Read a list of words.
+ */
+static string_list read_words(std::istream &in)
+{
+	string_list res;
+	while (true)
+	{
+		switch (next_token(in))
+		{
+			case Word:
+				res.push_back(read_word(in));
+				break;
+			default:
+				return res;
 		}
 	}
 }
@@ -462,6 +523,72 @@ static void load_dependencies()
 }
 
 /**
+ * Read a rule starting with target @a first, if nonempty.
+ */
+static rule_t read_rule(std::istream &in, std::string const &first)
+{
+	DEBUG_open << "Reading rule for target " << first << "... ";
+	if (false)
+	{
+		error:
+		DEBUG_close << "failed\n";
+		std::cerr << "Failed to load rules: syntax error" << std::endl;
+		exit(1);
+	}
+	rule_t rule;
+
+	// Read targets and check genericity.
+	string_list targets = read_words(in);
+	if (!first.empty()) targets.push_front(first);
+	if (targets.empty()) goto error;
+	for (string_list::const_iterator i = targets.begin(),
+	     i_end = targets.end(); i != i_end; ++i)
+	{
+		if (i->empty()) goto error;
+		if ((i->find('%') != std::string::npos) != rule.generic)
+		{
+			if (i == targets.begin()) rule.generic = true;
+			else goto error;
+		}
+	}
+	std::swap(rule.targets, targets);
+	if (in.get() != ':') goto error;
+
+	// Read dependencies and mark them as such if targets are specific.
+	rule.deps = read_words(in);
+	if (!rule.generic)
+	{
+		for (string_list::const_iterator i = rule.targets.begin(),
+		     i_end = rule.targets.end(); i != i_end; ++i)
+		{
+			deps[*i].insert(rule.deps.begin(), rule.deps.end());
+		}
+	}
+	char c = in.get();
+	if (c != '\r' && c != '\n') goto error;
+	skip_eol(in);
+
+	// Read script.
+	std::ostringstream buf;
+	while (true)
+	{
+		char c = in.get();
+		if (!in.good()) break;
+		if (c == '\t')
+			in.get(*buf.rdbuf());
+		else if (c == '\r' || c == '\n')
+			buf << c;
+		else
+		{
+			in.putback(c);
+			break;
+		}
+	}
+	rule.script = buf.str();
+	return rule;
+}
+
+/**
  * Save all the dependencies in file <tt>.remake</tt>.
  */
 static void save_dependencies()
@@ -483,11 +610,6 @@ static void save_dependencies()
 }
 
 /**
- * Internal state of the #load_rules parser.
- */
-enum load_state_e { Bof, Tgt, Dep, Script };
-
-/**
  * Load rules.
  * If some rules have dependencies and non-generic targets, add these
  * dependencies to the targets.
@@ -495,11 +617,10 @@ enum load_state_e { Bof, Tgt, Dep, Script };
 static void load_rules()
 {
 	DEBUG_open << "Loading rules... ";
-	int line = 1;
 	if (false)
 	{
 		error:
-		std::cerr << "Failed to load rules: syntax error at line" << line << std::endl;
+		std::cerr << "Failed to load rules: syntax error" << std::endl;
 		exit(1);
 	}
 	std::ifstream in("Remakefile");
@@ -508,73 +629,19 @@ static void load_rules()
 		std::cerr << "Failed to load rules: no Remakefile found" << std::endl;
 		exit(1);
 	}
-	rule_t current;
-	std::ostringstream buf;
-	load_state_e state = Bof;
-	while (!in.eof())
+	skip_eol(in);
+	while (in.good())
 	{
-		int c = in.get();
-		if (in.eof()) break;
-		if (state == Script && c == '\t')
+		char c = in.peek();
+		if (c == '#')
 		{
-			in.get(*buf.rdbuf());
+			while (in.get() != '\n') {}
+			continue;
 		}
-		else if (state == Script && (c == '\r' || c == '\n'))
-		{
-			buf << (char)c;
-			if (c == '\n') ++line;
-		}
-		else if (state == Dep && c == '\n')
-		{
-			++line;
-			state = Script;
-		}
-		else if (state == Tgt && c == ':')
-		{
-			state = Dep;
-			skip_spaces(in);
-		}
-		else
-		{
-			if (state == Script)
-			{
-				DEBUG << "adding rule for target " << current.targets.front() << std::endl;
-				current.script = buf.str();
-				rules.push_back(current);
-				buf.str(std::string());
-				current = rule_t();
-			}
-			in.putback(c);
-			std::string file = read_word(in);
-			skip_spaces(in);
-			if (file.empty()) goto error;
-			if (file.find('%') != std::string::npos)
-			{
-				if ((state == Tgt || state == Dep) && !current.generic)
-					goto error;
-				current.generic = true;
-			}
-			else if (state == Tgt && current.generic) goto error;
-			if (state != Dep)
-			{
-				current.targets.push_back(file);
-				state = Tgt;
-				continue;
-			}
-			current.deps.push_back(file);
-			if (current.generic) continue;
-			for (string_list::const_iterator i = current.targets.begin(),
-			     i_end = current.targets.end(); i != i_end; ++i)
-			{
-				deps[*i].insert(file);
-			}
-		}
-	}
-	if (state != Bof)
-	{
-		DEBUG << "adding rule for target " << current.targets.front() << std::endl;
-		current.script = buf.str();
-		rules.push_back(current);
+		if (c == ' ' || c == '\t') goto error;
+		token_e tok = next_token(in);
+		if (tok != Word) goto error;
+		rules.push_back(read_rule(in, read_word(in)));
 	}
 }
 
