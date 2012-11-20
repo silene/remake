@@ -404,7 +404,7 @@ static void skip_eol(std::istream &in)
 	if (in.good()) in.putback(c);
 }
 
-enum token_e { Word, Eol, Eof, Colon, Equal, Dollar, Rightpar };
+enum token_e { Word, Eol, Eof, Colon, Equal, Dollar, Rightpar, Comma };
 
 /**
  * Skip spaces and return the kind of the next token.
@@ -419,6 +419,7 @@ static token_e next_token(std::istream &in)
 		switch (c)
 		{
 		case ':': return Colon;
+		case ',': return Comma;
 		case '=': return Equal;
 		case '$': return Dollar;
 		case ')': return Rightpar;
@@ -498,7 +499,30 @@ static void execute_function(std::istream &in, std::string const &name, string_l
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
 		exit(1);
 	}
-	goto error;
+	skip_spaces(in);
+	std::string s = read_word(in);
+	if (next_token(in) != Comma) goto error;
+	in.ignore(1);
+	string_list names = read_words(in);
+	if (next_token(in) != Rightpar) goto error;
+	in.ignore(1);
+	if (name == "addprefix")
+	{
+		for (string_list::const_iterator i = names.begin(),
+		     i_end = names.end(); i != i_end; ++i)
+		{
+			dest.push_back(s + *i);
+		}
+	}
+	else if (name == "addsuffix")
+	{
+		for (string_list::const_iterator i = names.begin(),
+		     i_end = names.end(); i != i_end; ++i)
+		{
+			dest.push_back(*i + s);
+		}
+	}
+	else goto error;
 }
 
 /**
