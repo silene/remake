@@ -359,7 +359,7 @@ static std::string escape_string(std::string const &s)
 {
 	char const *quoted_char = ",: '";
 	char const *escaped_char = "\"\\$!";
-	bool need_quotes = true;
+	bool need_quotes = false;
 	size_t len = s.length(), nb = len;
 	for (size_t i = 0; i < len; ++i)
 	{
@@ -367,7 +367,7 @@ static std::string escape_string(std::string const &s)
 		if (strchr(escaped_char, s[i])) ++nb;
 	}
 	if (nb != len) need_quotes = true;
-	if (need_quotes) return s;
+	if (!need_quotes) return s;
 	std::string t(nb + 2, '\\');
 	t[0] = '"';
 	for (size_t i = 0, j = 1; i < len; ++i, ++j)
