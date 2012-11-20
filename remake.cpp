@@ -226,6 +226,11 @@ typedef std::list<client_t> client_list;
 static variable_map variables;
 
 /**
+ * Precomputed variable assignments for shell usage.
+ */
+static std::string variable_block;
+
+/**
  * Map from targets to their known dependencies.
  */
 static dependency_map deps;
@@ -682,6 +687,8 @@ static void load_rules()
 		exit(1);
 	}
 	skip_eol(in);
+
+	// Read rules
 	while (in.good())
 	{
 		char c = in.peek();
@@ -709,6 +716,24 @@ static void load_rules()
 			rules.push_back(read_rule(in, std::string()));
 		else goto error;
 	}
+
+	// Generate script for variable assignment
+	std::ostringstream buf;
+	for (variable_map::const_iterator i = variables.begin(),
+	     i_end = variables.end(); i != i_end; ++i)
+	{
+		std::ostringstream var;
+		bool first = true;
+		for (string_list::const_iterator j = i->second.begin(),
+		     j_end = i->second.end(); j != j_end; ++j)
+		{
+			if (first) first = false;
+			else var << ' ';
+			var << *j;
+		}
+		buf << i->first << '=' << escape_string(var.str()) << std::endl;
+	}
+	variable_block = buf.str();
 }
 
 /**
@@ -857,8 +882,9 @@ static void run_script(int job_id, rule_t const &rule)
 	if (pid_t pid = fork())
 	{
 		if (pid == -1) goto error;
-		ssize_t len = rule.script.length();
-		if (write(pfd[1], rule.script.c_str(), len) < len)
+		std::string script = variable_block + rule.script;
+		ssize_t len = script.length();
+		if (write(pfd[1], script.c_str(), len) < len)
 			goto error;
 		close(pfd[0]);
 		close(pfd[1]);
