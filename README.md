@@ -62,6 +62,7 @@ Options:
 
 - <tt>-j\[N\]</tt>, <tt>--jobs=\[N\]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
+- <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
 
 Other differences with <b>make</b>:
 

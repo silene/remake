@@ -67,6 +67,7 @@ cumulative, so they will all be remembered the next time.)
 Options:
 - <tt>-j[N]</tt>, <tt>--jobs=[N]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
+- <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
 
 Other differences with <b>make</b>:
 
@@ -212,10 +213,11 @@ struct client_t
 {
 	int fd;              ///< File descriptor used to reply to the client (negative for pseudo clients).
 	int job_id;          ///< Job for which the built script called remake and spawned the client (negative for original clients).
+	bool failed;         ///< Whether some targets failed in mode -k.
 	string_list pending; ///< Targets not yet started.
 	string_set running;  ///< Targets being built.
 	rule_t *delayed;     ///< Rule that implicitly created a dependency client, and which script has to be started on request completion.
-	client_t(): fd(-1), job_id(-1), delayed(NULL) {}
+	client_t(): fd(-1), job_id(-1), failed(false), delayed(NULL) {}
 };
 
 typedef std::list<client_t> client_list;
@@ -266,6 +268,12 @@ static client_list clients;
  * Can be modified by the -j option.
  */
 static int max_active_jobs = 1;
+
+/**
+ * Whether to keep building targets in case of failure.
+ * Can be modified by the -k option.
+ */
+static bool keep_going = false;
 
 /**
  * Number of jobs currently running:
@@ -1047,15 +1055,18 @@ static void update_clients()
 			assert(k != status.end());
 			switch (k->second.status)
 			{
+			case Running:
+				break;
+			case Failed:
+				if (!keep_going) goto failed;
+				i->failed = true;
+				// no break
 			case Uptodate:
 			case Remade:
 				i->running.erase(j);
-			case Running:
 				break;
 			case Todo:
 				assert(false);
-			case Failed:
-				goto failed;
 			}
 		}
 
@@ -1066,17 +1077,20 @@ static void update_clients()
 			i->pending.pop_front();
 			switch (get_status(target).status)
 			{
-			case Failed:
-				goto failed;
 			case Running:
 				i->running.insert(target);
 				break;
+			case Failed:
+				pending_failed:
+				if (!keep_going) goto failed;
+				i->failed = true;
+				// no break
 			case Uptodate:
 			case Remade:
 				break;
 			case Todo:
 				client_list::iterator j = i;
-				if (!start(target, i)) goto failed;
+				if (!start(target, i)) goto pending_failed;
 				j->running.insert(target);
 				if (!has_free_slots()) return;
 				// Job start might insert a dependency client.
@@ -1090,6 +1104,7 @@ static void update_clients()
 		// (This might start a new job if it was a dependency client.)
 		if (i->running.empty())
 		{
+			if (i->failed) goto failed;
 			complete_request(*i, true);
 			clients.erase(i);
 			DEBUG_close << "finished\n";
@@ -1339,7 +1354,8 @@ void usage(int exit_status)
 		"Options\n"
 		"  -d                 Print lots of debugging information.\n"
 		"  -h, --help         Print this message and exit.\n"
-		"  -j[N], --jobs=[N]  Allow N jobs at once; infinite jobs with no arg.\n";
+		"  -j[N], --jobs=[N]  Allow N jobs at once; infinite jobs with no arg.\n"
+		"  -k                 Keep going when some targets cannot be made.\n";
 	exit(exit_status);
 }
 
@@ -1366,6 +1382,8 @@ int main(int argc, char *argv[])
 		if (arg == "-h" || arg == "--help") usage(0);
 		if (arg == "-d")
 			debug.active = true;
+		else if (arg == "-k" || arg =="--keep-going")
+			keep_going = true;
 		else if (arg.compare(0, 2, "-j") == 0)
 			max_active_jobs = atoi(arg.c_str() + 2);
 		else if (arg.compare(0, 7, "--jobs=") == 0)
