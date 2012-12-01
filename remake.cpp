@@ -884,7 +884,7 @@ static void complete_job(int job_id, bool success)
 	job_targets.erase(i);
 }
 
-static void child_sig_handler(int sig)
+static void child_sig_handler(int)
 {
 	got_SIGCHLD = 1;
 }
@@ -1270,7 +1270,9 @@ void server_mode(string_list const &targets)
 		load_rules();
 	}
 	clients.push_back(client_t());
-	clients.back().pending = targets;
+	if (!targets.empty()) clients.back().pending = targets;
+	else if (!rules.empty() && !rules.front().generic)
+		clients.back().pending = rules.front().targets;
 	server_loop();
 	early_exit:
 	close(socket_fd);
