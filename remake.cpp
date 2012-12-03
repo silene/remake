@@ -663,7 +663,7 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 	{
 		char c = in.get();
 		if (!in.good()) break;
-		if (c == '\t')
+		if (c == '\t' || c == ' ')
 			in.get(*buf.rdbuf());
 		else if (c == '\r' || c == '\n')
 			buf << c;
