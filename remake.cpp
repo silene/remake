@@ -900,29 +900,34 @@ static void child_sig_handler(int)
 /**
  * Execute the script from @a rule.
  */
-static void run_script(int job_id, rule_t const &rule)
+static bool run_script(int job_id, rule_t const &rule)
 {
 	DEBUG_open << "Starting script for job " << job_id << "... ";
 	int pfd[2];
-	if (pipe(pfd) == -1)
+	if (false)
 	{
+		error2:
+		close(pfd[0]);
+		close(pfd[1]);
 		error:
 		DEBUG_close << "failed\n";
 		complete_job(job_id, false);
-		return;
+		return false;
 	}
+	if (pipe(pfd) == -1)
+		goto error;
 	if (pid_t pid = fork())
 	{
-		if (pid == -1) goto error;
+		if (pid == -1) goto error2;
 		std::string script = variable_block + rule.script;
 		ssize_t len = script.length();
 		if (write(pfd[1], script.c_str(), len) < len)
-			goto error;
+			std::cerr << "Something went wrong while sending script.\n";
 		close(pfd[0]);
 		close(pfd[1]);
 		++running_jobs;
 		job_pids[pid] = job_id;
-		return;
+		return true;
 	}
 	// Child process starts here.
 	std::ostringstream buf;
@@ -975,17 +980,17 @@ static bool start(std::string const &target, client_list::iterator &current)
 		dep.clear();
 		dep.insert(rule.deps.begin(), rule.deps.end());
 	}
+	int job_id = job_counter++;
+	job_targets[job_id] = rule.targets;
 	if (!rule.deps.empty())
 	{
 		current = clients.insert(current, client_t());
-		current->job_id = job_counter;
+		current->job_id = job_id;
 		std::swap(current->pending, rule.deps);
 		current->delayed = new rule_t(rule);
+		return true;
 	}
-	else run_script(job_counter, rule);
-	job_targets[job_counter] = rule.targets;
-	++job_counter;
-	return true;
+	return run_script(job_id, rule);
 }
 
 /**
