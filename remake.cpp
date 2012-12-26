@@ -128,6 +128,11 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 */
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define WINDOWS
+#endif
+
 #include <fstream>
 #include <iostream>
 #include <list>
@@ -141,11 +146,23 @@ GNU General Public License for more details.
 #include <ctime>
 #include <errno.h>
 #include <fcntl.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#ifdef WINDOWS
+#include <windows.h>
+#include <winbase.h>
+#include <winsock2.h>
+#define pid_t HANDLE
+typedef SOCKET socket_t;
+enum { MSG_NOSIGNAL = 0 };
+#else
+#include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
+typedef int socket_t;
+enum { INVALID_SOCKET = -1 };
+#endif
 
 typedef std::list<std::string> string_list;
 
@@ -211,13 +228,13 @@ typedef std::map<pid_t, int> pid_job_map;
  */
 struct client_t
 {
-	int fd;              ///< File descriptor used to reply to the client (negative for pseudo clients).
+	socket_t socket;     ///< Socket used to reply to the client (invalid for pseudo clients).
 	int job_id;          ///< Job for which the built script called remake and spawned the client (negative for original clients).
 	bool failed;         ///< Whether some targets failed in mode -k.
 	string_list pending; ///< Targets not yet started.
 	string_set running;  ///< Targets being built.
 	rule_t *delayed;     ///< Rule that implicitly created a dependency client, and which script has to be started on request completion.
-	client_t(): fd(-1), job_id(-1), failed(false), delayed(NULL) {}
+	client_t(): socket(INVALID_SOCKET), job_id(-1), failed(false), delayed(NULL) {}
 };
 
 typedef std::list<client_t> client_list;
@@ -305,7 +322,7 @@ static int job_counter = 0;
 /**
  * Socket on which the server listens for client request.
  */
-static int socket_fd;
+static socket_t socket_fd;
 
 /**
  * Whether the request of an original client failed.
@@ -317,7 +334,14 @@ static bool build_failure;
  */
 static char *socket_name;
 
+#ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
+
+static void child_sig_handler(int)
+{
+	got_SIGCHLD = 1;
+}
+#endif
 
 struct log
 {
@@ -892,17 +916,64 @@ static void complete_job(int job_id, bool success)
 	job_targets.erase(i);
 }
 
-static void child_sig_handler(int)
-{
-	got_SIGCHLD = 1;
-}
-
 /**
  * Execute the script from @a rule.
  */
 static bool run_script(int job_id, rule_t const &rule)
 {
 	DEBUG_open << "Starting script for job " << job_id << "... ";
+#ifdef WINDOWS
+	HANDLE pfd[2];
+	if (false)
+	{
+		error2:
+		CloseHandle(pfd[0]);
+		CloseHandle(pfd[1]);
+		error:
+		DEBUG_close << "failed\n";
+		complete_job(job_id, false);
+		return false;
+	}
+	if (!CreatePipe(&pfd[0], &pfd[1], NULL, 0))
+		goto error;
+	if (!SetHandleInformation(pfd[0], HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT))
+		goto error2;
+	STARTUPINFO si;
+	ZeroMemory(&si, sizeof(STARTUPINFO));
+	si.cb = sizeof(STARTUPINFO);
+	si.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+	si.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+	si.hStdInput = pfd[0];
+	si.dwFlags |= STARTF_USESTDHANDLES;
+	PROCESS_INFORMATION pi;
+	ZeroMemory(&pi, sizeof(PROCESS_INFORMATION));
+	std::ostringstream buf;
+	buf << job_id;
+	if (!SetEnvironmentVariable("REMAKE_JOB_ID", buf.str().c_str()))
+		goto error2;
+	std::ostringstream argv;
+	argv << "SH.EXE -e -s";
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		argv << " \"" << escape_string(*i) << '"';
+	}
+	if (!CreateProcess(NULL, (char *)argv.str().c_str(), NULL, NULL,
+	    true, 0, NULL, NULL, &si, &pi))
+	{
+		goto error2;
+	}
+	CloseHandle(pi.hThread);
+	std::string script = variable_block + rule.script;
+	DWORD len = script.length(), wlen;
+	if (!WriteFile(pfd[1], script.c_str(), len, &wlen, NULL) || wlen < len)
+		std::cerr << "Something went wrong while sending script.\n";
+	CloseHandle(pfd[0]);
+	CloseHandle(pfd[1]);
+	++running_jobs;
+	job_pids[pi.hProcess] = job_id;
+	return true;
+#else
 	int pfd[2];
 	if (false)
 	{
@@ -953,6 +1024,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	close(pfd[1]);
 	execv("/bin/sh", (char **)argv);
 	_exit(1);
+#endif
 }
 
 /**
@@ -1002,16 +1074,20 @@ static void complete_request(client_t &client, bool success)
 	DEBUG_open << "Completing request from client of job " << client.job_id << "... ";
 	if (client.delayed)
 	{
-		assert(client.fd < 0);
+		assert(client.socket == INVALID_SOCKET);
 		if (success) run_script(client.job_id, *client.delayed);
 		else complete_job(client.job_id, false);
 		delete client.delayed;
 	}
-	else if (client.fd >= 0)
+	else if (client.socket != INVALID_SOCKET)
 	{
 		char res = success ? 1 : 0;
-		send(client.fd, &res, 1, 0);
-		close(client.fd);
+		send(client.socket, &res, 1, 0);
+	#ifdef WINDOWS
+		closesocket(client.socket);
+	#else
+		close(client.socket);
+	#endif
 		--waiting_jobs;
 	}
 
@@ -1133,6 +1209,29 @@ static void create_server()
 	}
 	DEBUG_open << "Creating server... ";
 
+#ifdef WINDOWS
+	// Prepare a windows socket.
+	struct sockaddr_in socket_addr;
+	socket_addr.sin_family = AF_INET;
+	socket_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	socket_addr.sin_port = 0;
+
+	// Create and listen to the socket.
+	socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (socket_fd < 0) goto error;
+	if (!SetHandleInformation((HANDLE)socket_fd, HANDLE_FLAG_INHERIT, 0))
+		goto error;
+	if (bind(socket_fd, (struct sockaddr *)&socket_addr, sizeof(sockaddr_in)))
+		goto error;
+	int len = sizeof(sockaddr_in);
+	if (getsockname(socket_fd, (struct sockaddr *)&socket_addr, &len))
+		goto error;
+	std::ostringstream buf;
+	buf << socket_addr.sin_port;
+	if (!SetEnvironmentVariable("REMAKE_SOCKET", buf.str().c_str()))
+		goto error;
+	if (listen(socket_fd, 1000)) goto error;
+#else
 	// Set a handler for SIGCHLD then block the signal (unblocked during select).
 	sigset_t sigmask;
 	sigemptyset(&sigmask);
@@ -1161,6 +1260,7 @@ static void create_server()
 	if (bind(socket_fd, (struct sockaddr *)&socket_addr, len))
 		goto error;
 	if (listen(socket_fd, 1000)) goto error;
+#endif
 }
 
 /**
@@ -1172,8 +1272,18 @@ void accept_client()
 	DEBUG_open << "Handling client request... ";
 
 	// Accept connection.
+#ifdef WINDOWS
+	socket_t fd = accept(socket_fd, NULL, NULL);
+	if (fd == INVALID_SOCKET) return;
+	if (!SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0))
+	{
+		closesocket(fd);
+		return;
+	}
+#else
 	int fd = accept4(socket_fd, NULL, NULL, SOCK_CLOEXEC);
 	if (fd < 0) return;
+#endif
 	clients.push_front(client_t());
 	client_list::iterator proc = clients.begin();
 
@@ -1182,7 +1292,11 @@ void accept_client()
 		error:
 		DEBUG_close << "failed\n";
 		std::cerr << "Received an ill-formed client message" << std::endl;
+	#ifdef WINDOWS
+		closesocket(fd);
+	#else
 		close(fd);
+	#endif
 		clients.erase(proc);
 		return;
 	}
@@ -1201,8 +1315,8 @@ void accept_client()
 	// Parse job that spawned the client.
 	int job_id;
 	memcpy(&job_id, &buf[0], sizeof(int));
+	proc->socket = fd;
 	proc->job_id = job_id;
-	proc->fd = fd;
 	job_targets_map::const_iterator i = job_targets.find(job_id);
 	if (i == job_targets.end()) goto error;
 	DEBUG << "receiving request from job " << job_id << std::endl;
@@ -1244,6 +1358,28 @@ void server_loop()
 			break;
 		}
 		DEBUG_open << "Handling events... ";
+	#ifdef WINDOWS
+		size_t len = job_pids.size() + 1;
+		HANDLE h[len];
+		DWORD w = WaitForMultipleObjects(len, h, false, INFINITE);
+		if (w < WAIT_OBJECT_0 || WAIT_OBJECT_0 + len <= w)
+			continue;
+		if (w == WAIT_OBJECT_0 + len - 1)
+		{
+			accept_client();
+			continue;
+		}
+		pid_t pid = h[w - WAIT_OBJECT_0];
+		DWORD s = 0;
+		bool res = GetExitCodeProcess(pid, &s) && s == 0;
+		CloseHandle(pid);
+		pid_job_map::iterator i = job_pids.find(pid);
+		assert(i != job_pids.end());
+		int job_id = i->second;
+		job_pids.erase(i);
+		--running_jobs;
+		complete_job(job_id, res);
+	#else
 		sigset_t emptymask;
 		sigemptyset(&emptymask);
 		fd_set fdset;
@@ -1265,6 +1401,7 @@ void server_loop()
 			--running_jobs;
 			complete_job(job_id, res);
 		}
+	#endif
 	}
 }
 
@@ -1317,6 +1454,16 @@ void client_mode(char *socket_name, string_list const &targets)
 	DEBUG_open << "Connecting to server... ";
 
 	// Connect to server.
+#ifdef WINDOWS
+	struct sockaddr_in socket_addr;
+	socket_fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (socket_fd < 0) goto error;
+	socket_addr.sin_family = AF_INET;
+	socket_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+	socket_addr.sin_port = atoi(socket_name);
+	if (connect(socket_fd, (struct sockaddr *)&socket_addr, sizeof(sockaddr_in)))
+		goto error;
+#else
 	struct sockaddr_un socket_addr;
 	size_t len = strlen(socket_name);
 	if (len >= sizeof(socket_addr.sun_path) - 1) exit(1);
@@ -1326,11 +1473,12 @@ void client_mode(char *socket_name, string_list const &targets)
 	strcpy(socket_addr.sun_path, socket_name);
 	if (connect(socket_fd, (struct sockaddr *)&socket_addr, sizeof(socket_addr.sun_family) + len))
 		goto error;
+#endif
 
 	// Send current job id.
 	char *id = getenv("REMAKE_JOB_ID");
 	int job_id = id ? atoi(id) : -1;
-	if (send(socket_fd, &job_id, sizeof(job_id), MSG_NOSIGNAL) != sizeof(job_id))
+	if (send(socket_fd, (char *)&job_id, sizeof(job_id), MSG_NOSIGNAL) != sizeof(job_id))
 		goto error;
 
 	// Send tagets.
