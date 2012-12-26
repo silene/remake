@@ -1361,6 +1361,13 @@ void server_loop()
 	#ifdef WINDOWS
 		size_t len = job_pids.size() + 1;
 		HANDLE h[len];
+		int num = 0;
+		for (pid_job_map::const_iterator i = job_pids.begin(),
+		     i_end = job_pids.end(); i != i_end; ++i, ++num)
+		{
+			h[num] = i->first;
+		}
+		h[num] = (HANDLE)socket_fd;
 		DWORD w = WaitForMultipleObjects(len, h, false, INFINITE);
 		if (w < WAIT_OBJECT_0 || WAIT_OBJECT_0 + len <= w)
 			continue;
