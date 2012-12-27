@@ -968,7 +968,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	std::string script = variable_block + rule.script;
 	DWORD len = script.length(), wlen;
 	if (!WriteFile(pfd[1], script.c_str(), len, &wlen, NULL) || wlen < len)
-		std::cerr << "Something went wrong while sending script.\n";
+		std::cerr << "Unexpected failure while sending script to shell" << std::endl;
 	CloseHandle(pfd[0]);
 	CloseHandle(pfd[1]);
 	++running_jobs;
@@ -994,7 +994,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		std::string script = variable_block + rule.script;
 		ssize_t len = script.length();
 		if (write(pfd[1], script.c_str(), len) < len)
-			std::cerr << "Something went wrong while sending script.\n";
+			std::cerr << "Unexpected failure while sending script to shell" << std::endl;
 		close(pfd[0]);
 		close(pfd[1]);
 		++running_jobs;
@@ -1278,9 +1278,14 @@ void accept_client()
 	if (fd == INVALID_SOCKET) return;
 	if (!SetHandleInformation((HANDLE)fd, HANDLE_FLAG_INHERIT, 0))
 	{
+		error2:
+		std::cerr << "Unexpected failure while setting connection with client" << std::endl;
 		closesocket(fd);
 		return;
 	}
+	// WSAEventSelect puts sockets into nonblocking mode, so disable it here.
+	u_long nbio = 0;
+	if (ioctlsocket(fd, FIONBIO, &nbio)) goto error2;
 #else
 	int fd = accept4(socket_fd, NULL, NULL, SOCK_CLOEXEC);
 	if (fd < 0) return;
@@ -1368,8 +1373,12 @@ void server_loop()
 		{
 			h[num] = i->first;
 		}
-		h[num] = (HANDLE)socket_fd;
+		WSAEVENT aev = WSACreateEvent();
+		h[num] = aev;
+		WSAEventSelect(socket_fd, aev, FD_ACCEPT);
 		DWORD w = WaitForMultipleObjects(len, h, false, INFINITE);
+		WSAEventSelect(socket_fd, aev, 0);
+		WSACloseEvent(aev);
 		if (w < WAIT_OBJECT_0 || WAIT_OBJECT_0 + len <= w)
 			continue;
 		if (w == WAIT_OBJECT_0 + len - 1)
@@ -1556,6 +1565,15 @@ int main(int argc, char *argv[])
 			DEBUG << "New target: " << arg << '\n';
 		}
 	}
+
+#ifdef WINDOWS
+	WSADATA wsaData;
+	if (WSAStartup(MAKEWORD(2,2), &wsaData))
+	{
+		std::cerr << "Unexpected failure while initializing Windows Socket" << std::endl;
+		return 1;
+	}
+#endif
 
 	// Run as client if REMAKE_SOCKET is present in the environment.
 	if (char *sn = getenv("REMAKE_SOCKET")) client_mode(sn, targets);
