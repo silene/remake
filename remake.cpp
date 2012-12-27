@@ -751,6 +751,7 @@ static void load_rules()
 		if (c == '#')
 		{
 			while (in.get() != '\n') {}
+			skip_eol(in);
 			continue;
 		}
 		if (c == ' ' || c == '\t') goto error;
