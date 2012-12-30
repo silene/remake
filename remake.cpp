@@ -876,13 +876,19 @@ static rule_t find_generic_rule(std::string const &target)
 
 /**
  * Find a specific rule matching @a target. Return a generic one otherwise.
+ * If there is both a specific rule with an empty script and a generic rule, the
+ * generic one is returned after adding the dependencies of the specific one.
  */
 static rule_t find_rule(std::string const &target)
 {
 	rule_map::const_iterator i = specific_rules.find(target);
-	if (i != specific_rules.end())
-		return *i->second;
-	return find_generic_rule(target);
+	if (i == specific_rules.end()) return find_generic_rule(target);
+	rule_t const &srule = *i->second;
+	if (!srule.script.empty()) return srule;
+	rule_t grule = find_generic_rule(target);
+	if (grule.targets.empty()) return srule;
+	grule.deps.insert(grule.deps.end(), srule.deps.begin(), srule.deps.end());
+	return grule;
 }
 
 /**
