@@ -200,14 +200,14 @@ typedef std::map<std::string, status_t> status_map;
  */
 struct rule_t
 {
-	bool generic;        ///< Whether the filenames contain placeholders.
 	string_list targets; ///< Files produced by this rule.
 	string_list deps;    ///< Files used for an implicit call to remake at the start of the script.
 	std::string script;  ///< Shell script for building the targets.
-	rule_t(): generic(false) {}
 };
 
 typedef std::list<rule_t> rule_list;
+
+typedef std::map<std::string, rule_t const *> rule_map;
 
 typedef std::map<int, string_list> job_targets_map;
 
@@ -260,9 +260,19 @@ static dependency_map deps;
 static status_map status;
 
 /**
- * Set of loaded rules.
+ * Set of generic rules loaded from Remakefile.
  */
-static rule_list rules;
+static rule_list generic_rules;
+
+/**
+ * Set of specific rules loaded from Remakefile pointed by #specific_rule.
+ */
+static rule_list specific_rules_;
+
+/**
+ * Map from targets to specific rules.
+ */
+static rule_map specific_rules;
 
 /**
  * Map from jobs to targets being built.
@@ -634,8 +644,9 @@ static void load_dependencies()
 
 /**
  * Read a rule starting with target @a first, if nonempty.
+ * Store into #generic_rules or #specific_rules depending on its genericity.
  */
-static rule_t read_rule(std::istream &in, std::string const &first)
+static void load_rule(std::istream &in, std::string const &first)
 {
 	DEBUG_open << "Reading rule for target " << first << "... ";
 	if (false)
@@ -652,13 +663,14 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 	if (!first.empty()) targets.push_front(first);
 	else if (targets.empty()) goto error;
 	else DEBUG << "actual target: " << targets.front() << std::endl;
+	bool generic = false;
 	for (string_list::const_iterator i = targets.begin(),
 	     i_end = targets.end(); i != i_end; ++i)
 	{
 		if (i->empty()) goto error;
-		if ((i->find('%') != std::string::npos) != rule.generic)
+		if ((i->find('%') != std::string::npos) != generic)
 		{
-			if (i == targets.begin()) rule.generic = true;
+			if (i == targets.begin()) generic = true;
 			else goto error;
 		}
 	}
@@ -668,7 +680,7 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 
 	// Read dependencies and mark them as such if targets are specific.
 	rule.deps = read_words(in);
-	if (!rule.generic)
+	if (!generic)
 	{
 		for (string_list::const_iterator i = rule.targets.begin(),
 		     i_end = rule.targets.end(); i != i_end; ++i)
@@ -698,7 +710,26 @@ static rule_t read_rule(std::istream &in, std::string const &first)
 		}
 	}
 	rule.script = buf.str();
-	return rule;
+
+	// Add the rule to the correct set.
+	if (generic)
+	{
+		generic_rules.push_back(rule);
+		return;
+	}
+
+	specific_rules_.push_back(rule);
+	rule_t const *r = &specific_rules_.back();
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		std::pair<rule_map::iterator,bool> j =
+			specific_rules.insert(std::make_pair(*i, r));
+		if (j.second) continue;
+		std::cerr << "Failed to load rules: " << *i
+			<< " cannot be the target of several rules" << std::endl;
+		exit(1);
+	}
 }
 
 /**
@@ -767,10 +798,10 @@ static void load_rules()
 				variables[name] = read_words(in);
 				skip_eol(in);
 			}
-			else rules.push_back(read_rule(in, name));
+			else load_rule(in, name);
 		}
 		else if (tok == Dollar)
-			rules.push_back(read_rule(in, std::string()));
+			load_rule(in, std::string());
 		else goto error;
 	}
 
@@ -808,26 +839,20 @@ static void substitute_pattern(std::string const &pat, string_list const &src, s
 }
 
 /**
- * Find a rule matching @a target:
- * - non-generic rules have priority,
- * - among generic rules, the one leading to shorter matches have priority,
- * - among several rules, the earliest one has priority.
+ * Find a generic rule matching @a target:
+ * - the one leading to shorter matches has priority,
+ * - among equivalent rules, the earliest one has priority.
  */
-static rule_t find_rule(std::string const &target)
+static rule_t find_generic_rule(std::string const &target)
 {
-	size_t plen = 10000, tlen = target.length();
+	size_t tlen = target.length(), plen = tlen + 1;
 	rule_t rule;
-	for (rule_list::const_iterator i = rules.begin(),
-	     i_end = rules.end(); i != i_end; ++i)
+	for (rule_list::const_iterator i = generic_rules.begin(),
+	     i_end = generic_rules.end(); i != i_end; ++i)
 	{
 		for (string_list::const_iterator j = i->targets.begin(),
 		     j_end = i->targets.end(); j != j_end; ++j)
 		{
-			if (!i->generic)
-			{
-				if (*j == target) return *i;
-				else continue;
-			}
 			size_t len = j->length();
 			if (tlen < len) continue;
 			if (plen <= tlen - (len - 1)) continue;
@@ -847,6 +872,17 @@ static rule_t find_rule(std::string const &target)
 		}
 	}
 	return rule;
+}
+
+/**
+ * Find a specific rule matching @a target. Return a generic one otherwise.
+ */
+static rule_t find_rule(std::string const &target)
+{
+	rule_map::const_iterator i = specific_rules.find(target);
+	if (i != specific_rules.end())
+		return *i->second;
+	return find_generic_rule(target);
 }
 
 /**
@@ -1440,13 +1476,15 @@ void server_mode(string_list const &targets)
 		server_loop();
 		if (build_failure) goto early_exit;
 		variables.clear();
-		rules.clear();
+		specific_rules.clear();
+		specific_rules_.clear();
+		generic_rules.clear();
 		load_rules();
 	}
 	clients.push_back(client_t());
 	if (!targets.empty()) clients.back().pending = targets;
-	else if (!rules.empty() && !rules.front().generic)
-		clients.back().pending = rules.front().targets;
+	else if (!specific_rules_.empty() )
+		clients.back().pending = specific_rules_.front().targets;
 	server_loop();
 	early_exit:
 	close(socket_fd);
