@@ -907,18 +907,21 @@ static status_t const &get_status(std::string const &target)
 	status_t &ts = i.first->second;
 	if (stat(target.c_str(), &s) != 0)
 	{
-		obsolete:
 		ts.status = Todo;
-		DEBUG_close << "obsolete\n";
+		DEBUG_close << "missing\n";
 		return ts;
 	}
 	string_set const &dep = deps[target];
 	for (string_set::const_iterator k = dep.begin(),
 	     k_end = dep.end(); k != k_end; ++k)
 	{
-		status_t const &ts = get_status(*k);
-		if (ts.status != Uptodate || ts.last > s.st_mtime)
-			goto obsolete;
+		status_t const &ts_ = get_status(*k);
+		if (ts_.status != Uptodate || ts_.last > s.st_mtime)
+		{
+			ts.status = Todo;
+			DEBUG_close << "obsolete due to " << *k << std::endl;
+			return ts;
+		}
 	}
 	ts.status = Uptodate;
 	ts.last = s.st_mtime;
