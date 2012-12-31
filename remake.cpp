@@ -64,16 +64,132 @@ should perform a first call to <b>remake</b> them before calling the
 compiler. (Dependencies from several calls to <b>remake</b> are
 cumulative, so they will all be remembered the next time.)
 
+\section sec-usage Usage
+
+Usage: <tt>remake <i>options</i> <i>targets</i></tt>
+
 Options:
+
 - <tt>-j[N]</tt>, <tt>--jobs=[N]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
 
-Other differences with <b>make</b>:
+\section sec-syntax Syntax
 
+Lines starting with a space character or a tabulation are assumed to be rule
+scripts. They are only allowed after a rule header.
+
+Lines starting with <tt>#</tt> are considered to be comments and are ignored.
+They do interrupt rule scripts though.
+
+Any other line is either a rule header or a variable definition. If such a
+line ends with a backslash, the following line break is ignored and the line
+extends to the next one.
+
+Rule headers are a nonempty list of names, followed by a colon, followed by
+another list of names, possibly empty. Variable definitions are a single
+name followed by equal followed by a list of names, possibly empty. Basically,
+the syntax of a rule is as follows:
+
+@verbatim
+targets : prerequisites
+	shell script
+@endverbatim
+
+List of names are space-separated sequences of names. If a name contains a
+space character, it should be put into double quotes. Names can not be any
+of the following special characters <tt>:$(),="</tt>. Again, quotation
+should be used. Quotation marks can be escaped by a backslash inside
+quoted names.
+
+\subsection sec-variables Variables
+
+Variables can be used to factor lists of targets or dependencies. They are
+expanded as they are encountered during <b>Remakefile</b> parsing.
+
+@verbatim
+VAR1 = c d
+VAR2 = a $(VAR1) b
+$(VAR2) e :
+@endverbatim
+
+Variables can be used inside rule scripts; they are available as non-exported
+shell variables there.
+
+\subsection sec-functions Built-in functions
+
+<b>remake</b> also supports a few built-in functions inspired from <b>make</b>.
+
+- <tt>$(addprefix <i>prefix</i>, <i>list</i>)</tt> returns the list obtained
+  by prepending its first argument to each element of its second argument.
+- <tt>$(addsuffix <i>suffix</i>, <i>list</i>)</tt> returns the list obtained
+  by appending its first argument to each element of its second argument.
+
+Note that functions are ignored inside scripts.
+
+\section sec-rules Understanding rules
+
+There are two kinds of rules. If any of the targets or prerequisites contains
+a <tt>%</tt> character, the rule is said to be <em>generic</em>. All the
+targets of the rule shall then contain a single <tt>%</tt> character. All the
+other rules are said to be <em>specific</em>.
+
+A rule is said to <em>match</em> a given target:
+- if it is specific and the target appears into its target list,
+- if it is generic and there is a way to replace the <tt>%</tt> character of
+  one of the elements of its target list so that it matches the target.
+
+When <b>remake</b> tries to build a given target, it looks for a specific rule
+that matches it. If there is one and its script is nonempty, it uses it to
+rebuild the target.
+
+Otherwise, it looks for a generic rule that match the target. If there are
+several matching rules, it chooses the one with the shortest pattern (and if
+there are several ones, the earliest one). <b>remake</b> then looks for a
+specific rule that matches the first target of the generic rule. All the
+prerequisites of this specific rule are added to those of the generic rule.
+The script of the generic rule is used to build the target.
+
+The rule file is ill-formed:
+- if the specific rule matching the first target has a nonempty script,
+- if any of the targets of the generic rule (except for the first one) is
+  matched by a specific rule or by a generic rule with a shortest pattern.
+
+Example:
+
+@verbatim
+t%1 t2%: p1 p%2
+	commands building t%1 and t2%
+
+t2z: p4
+	commands building t2z
+
+ty1: p3
+
+# t2x is built by the first rule (which also builds tx1) and its prerequisites are p1, px2
+# t2y is built by the first rule (which also builds ty1) and its prerequisites are p1, py2, p3
+# t2z is built by the second rule and its prerequisite is p4
+@endverbatim
+
+\section sec-compilation Compilation
+
+- On Linux: <tt>g++ -o remake remake.cpp</tt>
+- On Windows: <tt>g++ -o remake.exe remake.cpp -lws2_32</tt>
+
+Installing <b>remake</b> is needed only if <b>Remakefile</b> does not
+specify the path to the executable for its recursive calls. Thanks to its
+single source file, <b>remake</b> can be shipped inside other packages and
+built at configuration time.
+
+\section sec-differences Differences with other build systems
+
+Differences with <b>make</b>:
+
+- Dynamic dependencies are supported.
 - For rules with multiple targets, the shell script is executed only once
   and is assumed to build all the targets. There is no need for
-  convoluted rules that are robust enough for parallel builds.
+  convoluted rules that are robust enough for parallel builds. For generic
+  rules, this is similar to the behavior of pattern rules from <b>gmake</b>.
 - As with <b>redo</b>, only one shell is run when executing a script,
   rather than one per script line. Note that the shells are run with
   option <tt>-e</tt>, thus causing them to exit as soon as an error is
@@ -81,10 +197,10 @@ Other differences with <b>make</b>:
 - The dependencies of generic rules (known as implicit rules in make lingo)
   are not used to decide between several of them. <b>remake</b> does not
   select one for which it could satisfy the dependencies.
-- <b>remake</b> has almost no features: no variables, no predefined
-  functions, etc.
+- Variables and built-in functions are expanded as they are encountered
+  during <b>Remakefile</b> parsing.
 
-Other differences with <b>redo</b>:
+Differences with <b>redo</b>:
 
 - As with <b>make</b>, it is possible to write the following kind of rules
   in <b>remake</b>.
@@ -92,23 +208,35 @@ Other differences with <b>redo</b>:
 Remakefile: Remakefile.in ./config.status
 	./config.status Remakefile
 @endverbatim
+- If a target is already built the first time <b>remake</b> runs, it still
+  uses the static prerequisites of rules mentioning it to check whether it
+  needs to be rebuilt. It does not assume it to be up-to-date. As with
+  <b>redo</b> though, if its obsolete status would be due to a dynamic
+  dependency, it will go unnoticed; it should be removed beforehand.
 - <b>remake</b> has almost no features: no checksum-based dependencies, no
   compatibility with token servers, etc.
 
-Other differences with <b>make</b> and <b>redo</b>:
+Differences with both <b>make</b> and <b>redo</b>:
 
+- Multiple targets are supported.
 - When executing shell scripts, positional variables <tt>$1</tt>,
   <tt>$2</tt>, etc, point to the target names of the rule obtained after
   substituting <tt>%</tt>. No other variables are defined.
 
-Limitations:
+\section sec-limitations Limitations
 
 - When the user or a script calls <b>remake</b>, the current working
   directory should be the one containing <b>Remakefile</b> (and thus
   <b>.remake</b> too).
+- Some cases of ill-formed rules are not caught by <b>remake</b> and can
+  thus lead to unpredictable behaviors.
+
+\section sec-links Links
 
 @see http://cr.yp.to/redo.html for the philosophy of <b>redo</b> and
 https://github.com/apenwarr/redo for an implementation and some comprehensive documentation.
+
+\section sec-licensing Licensing
 
 @author Guillaume Melquiond
 @version 0.1
