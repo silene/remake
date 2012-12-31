@@ -105,10 +105,7 @@ Limitations:
 
 - When the user or a script calls <b>remake</b>, the current working
   directory should be the one containing <b>Remakefile</b> (and thus
-  <b>.remake</b> too). This is unavoidable for user calls, but could be
-  improved for recursive calls.
-- Target names are not yet normalized, so <tt>f</tt> and <tt>d/../f</tt>
-  are two different targets.
+  <b>.remake</b> too).
 
 @see http://cr.yp.to/redo.html for the philosophy of <b>redo</b> and
 https://github.com/apenwarr/redo for an implementation and some comprehensive documentation.
@@ -427,6 +424,61 @@ static std::string escape_string(std::string const &s)
 }
 
 /**
+ * Normalize a target name.
+ */
+static std::string normalize(std::string const &s)
+{
+#ifdef WINDOWS
+	char const *delim = "/\\";
+#else
+	char delim = '/';
+#endif
+	size_t prev = 0, len = s.length();
+	size_t pos = s.find_first_of(delim);
+	if (pos == std::string::npos) return s;
+	string_list l;
+	for (;;)
+	{
+		if (pos != prev)
+		{
+			std::string n = s.substr(prev, pos - prev);
+			if (n == "..")
+			{
+				if (!l.empty()) l.pop_back();
+			}
+			else if (n != ".")
+				l.push_back(n);
+		}
+		++pos;
+		if (pos >= len) break;
+		prev = pos;
+		pos = s.find_first_of(delim, prev);
+		if (pos == std::string::npos) pos = len;
+	}
+	string_list::const_iterator i = l.begin(), i_end = l.end();
+	if (i == i_end) return ".";
+	std::string n(*i);
+	for (++i; i != i_end; ++i)
+	{
+		n.push_back('/');
+		n.append(*i);
+	}
+	return n;
+}
+
+/**
+ * Normalize the content of a list of targets.
+ */
+static void normalize_list(string_list &l)
+{
+	for (string_list::iterator i = l.begin(),
+	     i_end = l.end(); i != i_end; ++i)
+	{
+		*i = normalize(*i);
+	}
+}
+
+/**
  * Skip spaces.
  */
 static void skip_spaces(std::istream &in)
@@ -664,6 +716,7 @@ static void load_rule(std::istream &in, std::string const &first)
 	else if (targets.empty()) goto error;
 	else DEBUG << "actual target: " << targets.front() << std::endl;
 	bool generic = false;
+	normalize_list(targets);
 	for (string_list::const_iterator i = targets.begin(),
 	     i_end = targets.end(); i != i_end; ++i)
 	{
@@ -680,6 +733,7 @@ static void load_rule(std::istream &in, std::string const &first)
 
 	// Read dependencies and mark them as such if targets are specific.
 	rule.deps = read_words(in);
+	normalize_list(rule.deps);
 	if (!generic)
 	{
 		for (string_list::const_iterator i = rule.targets.begin(),
@@ -1608,7 +1662,7 @@ int main(int argc, char *argv[])
 		else
 		{
 			if (arg[0] == '-') usage(1);
-			targets.push_back(arg);
+			targets.push_back(normalize(arg));
 			DEBUG << "New target: " << arg << '\n';
 		}
 	}

@@ -100,10 +100,7 @@ Limitations:
 
 - When the user or a script calls <b>remake</b>, the current working
   directory should be the one containing <b>Remakefile</b> (and thus
-  <b>.remake</b> too). This is unavoidable for user calls, but could be
-  improved for recursive calls.
-- Target names are not yet normalized, so <tt>f</tt> and <tt>d/../f</tt>
-  are two different targets.
+  <b>.remake</b> too).
 
 See <http://cr.yp.to/redo.html> for the philosophy of <b>redo</b> and
 <https://github.com/apenwarr/redo> for an implementation and some comprehensive documentation.
