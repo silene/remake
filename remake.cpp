@@ -935,13 +935,36 @@ static rule_t find_generic_rule(std::string const &target)
  */
 static rule_t find_rule(std::string const &target)
 {
-	rule_map::const_iterator i = specific_rules.find(target);
-	if (i == specific_rules.end()) return find_generic_rule(target);
-	rule_t const &srule = *i->second;
-	if (!srule.script.empty()) return srule;
+	rule_map::const_iterator i = specific_rules.find(target),
+		i_end = specific_rules.end();
+	// If there is a specific rule with a script, return it.
+	if (i != i_end && !i->second->script.empty()) return *i->second;
 	rule_t grule = find_generic_rule(target);
-	if (grule.targets.empty()) return srule;
-	grule.deps.insert(grule.deps.end(), srule.deps.begin(), srule.deps.end());
+	// If there is no generic rule, return the specific rule (no script), if any.
+	if (grule.targets.empty())
+	{
+		if (i != i_end) return *i->second;
+		return grule;
+	}
+	// Get the specific rule for the primary target.
+	std::string const &primary = grule.targets.front();
+	if (primary != target)
+	{
+		i = specific_rules.find(primary);
+		// If there is one with a script, error out.
+		if (i != i_end && !i->second->script.empty()) return rule_t();
+	}
+	// If there is a specific rule for a secondary target, error out.
+	for (string_list::const_iterator j = grule.targets.begin(),
+	     j_end = grule.targets.end(); ++j != j_end;)
+	{
+		if (specific_rules.find(*j) != i_end) return rule_t();
+	}
+	// Add the dependencies of the specific rule (if any) for the
+	// primary target to the generic rule.
+	if (i == i_end) return grule;
+	grule.deps.insert(grule.deps.end(),
+		i->second->deps.begin(), i->second->deps.end());
 	return grule;
 }
 
