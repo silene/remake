@@ -902,21 +902,9 @@ static void load_rule(std::istream &in, std::string const &first)
 	skip_spaces(in);
 	if (in.get() != ':') goto error;
 
-	// Read dependencies and mark them as such if targets are specific.
+	// Read dependencies.
 	rule.deps = read_words(in);
 	normalize_list(rule.deps);
-	if (!generic)
-	{
-		ref_ptr<dependency_t> dep;
-		dep->targets = rule.targets;
-		for (string_list::const_iterator i = rule.targets.begin(),
-		     i_end = rule.targets.end(); i != i_end; ++i)
-		{
-			ref_ptr<dependency_t> &d = dependencies[*i];
-			dep->deps.insert(d->deps.begin(), d->deps.end());
-			d = dep;
-		}
-	}
 	skip_spaces(in);
 	char c = in.get();
 	if (c != '\r' && c != '\n') goto error;
@@ -943,11 +931,38 @@ static void load_rule(std::istream &in, std::string const &first)
 	}
 	rule.script = buf.str();
 
-	// Add the rule to the correct set.
+	// Add generic rules to the correct set.
 	if (generic)
 	{
 		generic_rules.push_back(rule);
 		return;
+	}
+
+	// Rules with a nonempty script lump all their targets in the same
+	// dependency set, while other rules behave as if they had been
+	// replicated for each of their targets.
+	if (!rule.script.empty())
+	{
+		ref_ptr<dependency_t> dep;
+		dep->targets = rule.targets;
+		dep->deps.insert(rule.deps.begin(), rule.deps.end());
+		for (string_list::const_iterator i = rule.targets.begin(),
+		     i_end = rule.targets.end(); i != i_end; ++i)
+		{
+			ref_ptr<dependency_t> &d = dependencies[*i];
+			dep->deps.insert(d->deps.begin(), d->deps.end());
+			d = dep;
+		}
+	}
+	else
+	{
+		for (string_list::const_iterator i = rule.targets.begin(),
+		     i_end = rule.targets.end(); i != i_end; ++i)
+		{
+			ref_ptr<dependency_t> &dep = dependencies[*i];
+			if (dep->targets.empty()) dep->targets.push_back(*i);
+			dep->deps.insert(rule.deps.begin(), rule.deps.end());
+		}
 	}
 
 	if (first_target.empty())

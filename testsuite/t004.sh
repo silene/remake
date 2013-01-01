@@ -10,13 +10,13 @@ b: d
 	cat d >> b
 c d:
 	echo c > c
-	echo d\$TAG > d
+	echo d\$TICK > d
 EOF
 
-export TAG=1
+export TICK=1
 $REMAKE
 rm c
-TAG=2
+TICK=2
 $REMAKE
-# TAG emulates time; if b contains "d1", then b is obsolete since d contains "d2"
+# if b contains "d1", then b is obsolete since d contains "d2"
 grep -q d2 b
