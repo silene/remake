@@ -1147,6 +1147,14 @@ static rule_t find_rule(std::string const &target)
 		if (i != i_end) return *i->second;
 		return grule;
 	}
+	// Optimize the lookup when there is only one target (alread looked up).
+	if (grule.targets.size() == 1)
+	{
+		if (i != i_end)
+			grule.deps.insert(grule.deps.end(),
+				i->second->deps.begin(), i->second->deps.end());
+		return grule;
+	}
 	// Add the dependencies of the specific rules of every target to the
 	// generic rule. If any of those rules has a nonempty script, error out.
 	for (string_list::const_iterator j = grule.targets.begin(),
