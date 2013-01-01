@@ -1174,6 +1174,10 @@ static rule_t find_rule(std::string const &target)
  * - if the file does not exist, the target is obsolete,
  * - if any dependency is obsolete or younger than the file, it is obsolete,
  * - otherwise it is up-to-date.
+ *
+ * @note With multiple targets, they all share the same status. (If one is
+ *       obsolete, they all are.) For the second rule above, the latest target
+ *       is chosen, not the oldest!
  */
 static status_t const &get_status(std::string const &target)
 {
@@ -1199,10 +1203,9 @@ static status_t const &get_status(std::string const &target)
 	}
 	dependency_t const &dep = *j->second;
 	status_e st = Todo;
-	time_t oldest;
-	bool first = true;
+	time_t latest = 0;
 	for (string_list::const_iterator k = dep.targets.begin(),
-	     k_end = dep.targets.end(); k != k_end; ++k, first = false)
+	     k_end = dep.targets.end(); k != k_end; ++k)
 	{
 		struct stat s;
 		if (stat(k->c_str(), &s) != 0)
@@ -1211,13 +1214,13 @@ static status_t const &get_status(std::string const &target)
 			goto update;
 		}
 		status[*k].last = s.st_mtime;
-		if (first || s.st_mtime < oldest) oldest = s.st_mtime;
+		if (s.st_mtime > latest) latest = s.st_mtime;
 	}
 	for (string_set::const_iterator k = dep.deps.begin(),
 	     k_end = dep.deps.end(); k != k_end; ++k)
 	{
 		status_t const &ts_ = get_status(*k);
-		if (ts_.status != Uptodate || ts_.last > oldest)
+		if (ts_.status != Uptodate || ts_.last > latest)
 		{
 			DEBUG_close << "obsolete due to " << *k << std::endl;
 			goto update;
