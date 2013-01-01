@@ -293,6 +293,36 @@ typedef std::list<std::string> string_list;
 
 typedef std::set<std::string> string_set;
 
+/**
+ * Reference-counted shared object.
+ */
+template<class T>
+struct ref_ptr
+{
+	struct content
+	{
+		size_t cnt;
+		T val;
+		content(): cnt(1) {}
+		content(T const &t): cnt(1), val(t) {}
+	};
+	content *ptr;
+	ref_ptr(): ptr(new content) {}
+	ref_ptr(T const &t): ptr(new content(t)) {}
+	ref_ptr(ref_ptr const &p): ptr(p.ptr) { ++ptr->cnt; }
+	~ref_ptr() { if (--ptr->cnt == 0) delete ptr; }
+	ref_ptr &operator=(ref_ptr const &p)
+	{
+		if (ptr == p.ptr) return *this;
+		if (--ptr->cnt == 0) delete ptr;
+		ptr = p.ptr;
+		++ptr->cnt;
+		return *this;
+	}
+	T *operator->() const { return &ptr->val; }
+	T &operator*() const { return ptr->val; }
+};
+
 typedef std::map<std::string, string_set> dependency_map;
 
 typedef std::map<std::string, string_list> variable_map;
@@ -332,7 +362,7 @@ struct rule_t
 
 typedef std::list<rule_t> rule_list;
 
-typedef std::map<std::string, rule_t const *> rule_map;
+typedef std::map<std::string, ref_ptr<rule_t> > rule_map;
 
 typedef std::map<int, string_list> job_targets_map;
 
@@ -390,12 +420,7 @@ static status_map status;
 static rule_list generic_rules;
 
 /**
- * Set of specific rules loaded from Remakefile pointed by #specific_rule.
- */
-static rule_list specific_rules_;
-
-/**
- * Map from targets to specific rules.
+ * Map from targets to specific rules loaded from Remakefile.
  */
 static rule_map specific_rules;
 
@@ -468,6 +493,11 @@ static bool build_failure;
  * Name of the server socket in the file system.
  */
 static char *socket_name;
+
+/**
+ * Name of the first target of the first specific rule, used for default run.
+ */
+static std::string first_target;
 
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
@@ -903,8 +933,10 @@ static void load_rule(std::istream &in, std::string const &first)
 		return;
 	}
 
-	specific_rules_.push_back(rule);
-	rule_t const *r = &specific_rules_.back();
+	if (first_target.empty())
+		first_target = rule.targets.front();
+
+	ref_ptr<rule_t> r(rule);
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i)
 	{
@@ -1694,14 +1726,14 @@ void server_mode(string_list const &targets)
 		if (build_failure) goto early_exit;
 		variables.clear();
 		specific_rules.clear();
-		specific_rules_.clear();
 		generic_rules.clear();
+		first_target.clear();
 		load_rules();
 	}
 	clients.push_back(client_t());
 	if (!targets.empty()) clients.back().pending = targets;
-	else if (!specific_rules_.empty() )
-		clients.back().pending = specific_rules_.front().targets;
+	else if (!first_target.empty())
+		clients.back().pending.push_back(first_target);
 	server_loop();
 	early_exit:
 	close(socket_fd);
