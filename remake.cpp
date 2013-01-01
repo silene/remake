@@ -135,9 +135,10 @@ targets of the rule shall then contain a single <tt>%</tt> character. All the
 other rules are said to be <em>specific</em>.
 
 A rule is said to <em>match</em> a given target:
-- if it is specific and the target appears into its target list,
-- if it is generic and there is a way to replace the <tt>%</tt> character of
-  one of the elements of its target list so that it matches the target.
+
+- if it is specific and the target appears inside its target list,
+- if it is generic and there is a way to replace the <tt>%</tt> character
+  from one of its targets so that it matches the given target.
 
 When <b>remake</b> tries to build a given target, it looks for a specific rule
 that matches it. If there is one and its script is nonempty, it uses it to
@@ -145,15 +146,10 @@ rebuild the target.
 
 Otherwise, it looks for a generic rule that match the target. If there are
 several matching rules, it chooses the one with the shortest pattern (and if
-there are several ones, the earliest one). <b>remake</b> then looks for a
-specific rule that matches the first target of the generic rule. All the
-prerequisites of this specific rule are added to those of the generic rule.
+there are several ones, the earliest one). <b>remake</b> then looks for
+specific rules that match each target of the generic rule. All the
+prerequisites of these specific rules are added to those of the generic rule.
 The script of the generic rule is used to build the target.
-
-The rule file is ill-formed:
-- if the specific rule matching the first target has a nonempty script,
-- if any of the targets of the generic rule (except for the first one) is
-  matched by a specific rule or by a generic rule with a shortest pattern.
 
 Example:
 
@@ -170,6 +166,11 @@ ty1: p3
 # t2y is built by the first rule (which also builds ty1) and its prerequisites are p1, py2, p3
 # t2z is built by the second rule and its prerequisite is p4
 @endverbatim
+
+The set of rules from <b>Remakefile</b> is ill-formed:
+
+- if any specific rule matching a target of the generic rule has a nonempty script,
+- if any target of the generic rule is matched by a generic rule with a shorter pattern.
 
 \section sec-compilation Compilation
 
@@ -1146,25 +1147,17 @@ static rule_t find_rule(std::string const &target)
 		if (i != i_end) return *i->second;
 		return grule;
 	}
-	// Get the specific rule for the primary target.
-	std::string const &primary = grule.targets.front();
-	if (primary != target)
-	{
-		i = specific_rules.find(primary);
-		// If there is one with a script, error out.
-		if (i != i_end && !i->second->script.empty()) return rule_t();
-	}
-	// If there is a specific rule for a secondary target, error out.
+	// Add the dependencies of the specific rules of every target to the
+	// generic rule. If any of those rules has a nonempty script, error out.
 	for (string_list::const_iterator j = grule.targets.begin(),
-	     j_end = grule.targets.end(); ++j != j_end;)
+	     j_end = grule.targets.end(); j != j_end; ++j)
 	{
-		if (specific_rules.find(*j) != i_end) return rule_t();
+		i = specific_rules.find(*j);
+		if (i == i_end) continue;
+		if (!i->second->script.empty()) return rule_t();
+		grule.deps.insert(grule.deps.end(),
+			i->second->deps.begin(), i->second->deps.end());
 	}
-	// Add the dependencies of the specific rule (if any) for the
-	// primary target to the generic rule.
-	if (i == i_end) return grule;
-	grule.deps.insert(grule.deps.end(),
-		i->second->deps.begin(), i->second->deps.end());
 	return grule;
 }
 
