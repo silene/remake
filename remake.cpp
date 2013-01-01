@@ -347,13 +347,14 @@ enum status_e
 {
 	Uptodate, ///< Target is up-to-date.
 	Todo,     ///< Target is missing or obsolete.
+	Recheck,  ///< Target has an obsolete dependency.
 	Running,  ///< Target is being rebuilt.
 	Remade,   ///< Target was successfully rebuilt.
 	Failed    ///< Build failed for target.
 };
 
 /**
- * Build status of a target and last-modified date for up-to-date targets.
+ * Build status of a target.
  */
 struct status_t
 {
@@ -511,6 +512,8 @@ static char *socket_name;
  * Name of the first target of the first specific rule, used for default run.
  */
 static std::string first_target;
+
+static time_t now = time(NULL);
 
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
@@ -1194,6 +1197,7 @@ static status_t const &get_status(std::string const &target)
 		{
 			DEBUG_close << "missing\n";
 			ts.status = Todo;
+			ts.last = 0;
 			return ts;
 		}
 		DEBUG_close << "up-to-date\n";
@@ -1202,7 +1206,7 @@ static status_t const &get_status(std::string const &target)
 		return ts;
 	}
 	dependency_t const &dep = *j->second;
-	status_e st = Todo;
+	status_e st = Uptodate;
 	time_t latest = 0;
 	for (string_list::const_iterator k = dep.targets.begin(),
 	     k_end = dep.targets.end(); k != k_end; ++k)
@@ -1210,24 +1214,30 @@ static status_t const &get_status(std::string const &target)
 		struct stat s;
 		if (stat(k->c_str(), &s) != 0)
 		{
-			DEBUG_close << *k << " missing\n";
-			goto update;
+			if (st == Uptodate) DEBUG_close << *k << " missing\n";
+			s.st_mtime = 0;
+			st = Todo;
 		}
 		status[*k].last = s.st_mtime;
 		if (s.st_mtime > latest) latest = s.st_mtime;
 	}
+	if (st == Todo) goto update;
 	for (string_set::const_iterator k = dep.deps.begin(),
 	     k_end = dep.deps.end(); k != k_end; ++k)
 	{
 		status_t const &ts_ = get_status(*k);
-		if (ts_.status != Uptodate || ts_.last > latest)
+		if (latest < ts_.last)
 		{
-			DEBUG_close << "obsolete due to " << *k << std::endl;
+			DEBUG_close << "older than " << *k << std::endl;
+			st = Todo;
 			goto update;
 		}
+		if (ts_.status == Uptodate) continue;
+		if (st == Uptodate)
+			DEBUG << "obsolete dependency " << *k << std::endl;
+		st = Recheck;
 	}
-	DEBUG_close << "all siblings up-to-date\n";
-	st = Uptodate;
+	if (st == Uptodate) DEBUG_close << "all siblings up-to-date\n";
 	update:
 	for (string_list::const_iterator k = dep.targets.begin(),
 	     k_end = dep.targets.end(); k != k_end; ++k)
@@ -1235,6 +1245,66 @@ static status_t const &get_status(std::string const &target)
 		status[*k].status = st;
 	}
 	return ts;
+}
+
+/**
+ * Change the status of @a target to #Remade or #Uptodate depending on whether
+ * its modification time changed.
+ */
+static void update_status(std::string const &target)
+{
+	DEBUG_open << "Rechecking status of " << target << "... ";
+	status_map::iterator i = status.find(target);
+	assert (i != status.end());
+	status_t &ts = i->second;
+	ts.status = Remade;
+	if (ts.last >= now)
+	{
+		DEBUG_close << "possibly remade\n";
+		return;
+	}
+	struct stat s;
+	if (stat(target.c_str(), &s) != 0)
+	{
+		DEBUG_close << "missing\n";
+		ts.last = 0;
+	}
+	else if (s.st_mtime != ts.last)
+	{
+		DEBUG_close << "remade\n";
+		ts.last = s.st_mtime;
+	}
+	else
+	{
+		DEBUG_close << "unchanged\n";
+		ts.status = Uptodate;
+	}
+}
+
+/**
+ * Check if all the prerequisites of @a target ended being up-to-date.
+ */
+static bool still_need_rebuild(std::string const &target)
+{
+	DEBUG_open << "Rechecking obsoleteness of " << target << "... ";
+	status_map::const_iterator i = status.find(target);
+	assert (i != status.end());
+	if (i->second.status != Recheck) return true;
+	dependency_map::const_iterator j = dependencies.find(target);
+	assert(j != dependencies.end());
+	dependency_t const &dep = *j->second;
+	for (string_set::const_iterator k = dep.deps.begin(),
+	     k_end = dep.deps.end(); k != k_end; ++k)
+	{
+		if (status[*k].status != Uptodate) return true;
+	}
+	for (string_list::const_iterator k = dep.targets.begin(),
+	     k_end = dep.targets.end(); k != k_end; ++k)
+	{
+		status[*k].status = Uptodate;
+	}
+	DEBUG_close << "no longer obsolete\n";
+	return false;
 }
 
 /**
@@ -1251,7 +1321,7 @@ static void complete_job(int job_id, bool success)
 		for (string_list::const_iterator j = targets.begin(),
 		     j_end = targets.end(); j != j_end; ++j)
 		{
-			status[*j].status = Remade;
+			update_status(*j);
 		}
 	}
 	else
@@ -1275,6 +1345,15 @@ static void complete_job(int job_id, bool success)
  */
 static bool run_script(int job_id, rule_t const &rule)
 {
+	ref_ptr<dependency_t> dep;
+	dep->targets = rule.targets;
+	dep->deps.insert(rule.deps.begin(), rule.deps.end());
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		dependencies[*i] = dep;
+	}
+
 	DEBUG_open << "Starting script for job " << job_id << "... ";
 #ifdef WINDOWS
 	HANDLE pfd[2];
@@ -1398,14 +1477,10 @@ static bool start(std::string const &target, client_list::iterator &current)
 		std::cerr << "No rule for building " << target << std::endl;
 		return false;
 	}
-	ref_ptr<dependency_t> dep;
-	dep->targets = rule.targets;
-	dep->deps.insert(rule.deps.begin(), rule.deps.end());
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i)
 	{
 		status[*i].status = Running;
-		dependencies[*i] = dep;
 	}
 	int job_id = job_counter++;
 	job_targets[job_id] = rule.targets;
@@ -1430,7 +1505,12 @@ static void complete_request(client_t &client, bool success)
 	if (client.delayed)
 	{
 		assert(client.socket == INVALID_SOCKET);
-		if (success) run_script(client.job_id, *client.delayed);
+		if (success)
+		{
+			if (still_need_rebuild(client.delayed->targets.front()))
+				run_script(client.job_id, *client.delayed);
+			else complete_job(client.job_id, true);
+		}
 		else complete_job(client.job_id, false);
 		delete client.delayed;
 	}
@@ -1501,6 +1581,7 @@ static void update_clients()
 			case Remade:
 				i->running.erase(j);
 				break;
+			case Recheck:
 			case Todo:
 				assert(false);
 			}
@@ -1524,6 +1605,7 @@ static void update_clients()
 			case Uptodate:
 			case Remade:
 				break;
+			case Recheck:
 			case Todo:
 				client_list::iterator j = i;
 				if (!start(target, i)) goto pending_failed;
