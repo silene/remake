@@ -295,6 +295,8 @@ typedef std::set<std::string> string_set;
 
 /**
  * Reference-counted shared object.
+ * @note The default constructor delays the creation of the object until it
+ *       is first deferenced.
  */
 template<class T>
 struct ref_ptr
@@ -306,24 +308,34 @@ struct ref_ptr
 		content(): cnt(1) {}
 		content(T const &t): cnt(1), val(t) {}
 	};
-	content *ptr;
-	ref_ptr(): ptr(new content) {}
+	mutable content *ptr;
+	ref_ptr(): ptr(NULL) {}
 	ref_ptr(T const &t): ptr(new content(t)) {}
-	ref_ptr(ref_ptr const &p): ptr(p.ptr) { ++ptr->cnt; }
-	~ref_ptr() { if (--ptr->cnt == 0) delete ptr; }
+	ref_ptr(ref_ptr const &p): ptr(p.ptr) { if (ptr) ++ptr->cnt; }
+	~ref_ptr() { if (ptr && --ptr->cnt == 0) delete ptr; }
 	ref_ptr &operator=(ref_ptr const &p)
 	{
 		if (ptr == p.ptr) return *this;
-		if (--ptr->cnt == 0) delete ptr;
+		if (ptr && --ptr->cnt == 0) delete ptr;
 		ptr = p.ptr;
-		++ptr->cnt;
+		if (ptr) ++ptr->cnt;
 		return *this;
 	}
-	T *operator->() const { return &ptr->val; }
-	T &operator*() const { return ptr->val; }
+	T &operator*() const
+	{
+		if (!ptr) ptr = new content;
+		return ptr->val;
+	}
+	T *operator->() const { return &**this; }
 };
 
-typedef std::map<std::string, string_set> dependency_map;
+struct dependency_t
+{
+	string_list targets;
+	string_set deps;
+};
+
+typedef std::map<std::string, ref_ptr<dependency_t> > dependency_map;
 
 typedef std::map<std::string, string_list> variable_map;
 
@@ -407,7 +419,7 @@ static std::string variable_block;
 /**
  * Map from targets to their known dependencies.
  */
-static dependency_map deps;
+static dependency_map dependencies;
 
 /**
  * Map from targets to their build status.
@@ -832,21 +844,22 @@ static void load_dependencies()
 	}
 	while (!in.eof())
 	{
-		std::string target = read_word(in);
-		if (target.empty()) return;
-		DEBUG << "reading dependencies of target " << target << std::endl;
+		string_list targets = read_words(in);
+		if (targets.empty()) return;
+		DEBUG << "reading dependencies of target " << targets.front() << std::endl;
 		if (in.get() != ':')
 		{
 			std::cerr << "Failed to load database" << std::endl;
 			exit(1);
 		}
-		std::string dep;
-		skip_spaces(in);
-		while (!(dep = read_word(in)).empty())
+		ref_ptr<dependency_t> dep;
+		dep->targets = targets;
+		string_list d = read_words(in);
+		dep->deps.insert(d.begin(), d.end());
+		for (string_list::const_iterator i = targets.begin(),
+		     i_end = targets.end(); i != i_end; ++i)
 		{
-			DEBUG << "adding " << dep << " as dependency\n";
-			deps[target].insert(dep);
-			skip_spaces(in);
+			dependencies[*i] = dep;
 		}
 		skip_eol(in);
 	}
@@ -894,10 +907,14 @@ static void load_rule(std::istream &in, std::string const &first)
 	normalize_list(rule.deps);
 	if (!generic)
 	{
+		ref_ptr<dependency_t> dep;
+		dep->targets = rule.targets;
 		for (string_list::const_iterator i = rule.targets.begin(),
 		     i_end = rule.targets.end(); i != i_end; ++i)
 		{
-			deps[*i].insert(rule.deps.begin(), rule.deps.end());
+			ref_ptr<dependency_t> &d = dependencies[*i];
+			dep->deps.insert(d->deps.begin(), d->deps.end());
+			d = dep;
 		}
 	}
 	skip_spaces(in);
@@ -956,15 +973,20 @@ static void save_dependencies()
 {
 	DEBUG_open << "Saving database... ";
 	std::ofstream db(".remake");
-	for (dependency_map::const_iterator i = deps.begin(),
-	     i_end = deps.end(); i != i_end; ++i)
+	while (!dependencies.empty())
 	{
-		if (i->second.empty()) continue;
-		db << escape_string(i->first) << ": ";
-		for (string_set::const_iterator j = i->second.begin(),
-		     j_end = i->second.end(); j != j_end; ++j)
+		ref_ptr<dependency_t> dep = dependencies.begin()->second;
+		for (string_list::const_iterator i = dep->targets.begin(),
+		     i_end = dep->targets.end(); i != i_end; ++i)
 		{
-			db << escape_string(*j) << ' ';
+			db << escape_string(*i) << ' ';
+			dependencies.erase(*i);
+		}
+		db << ':';
+		for (string_set::const_iterator i = dep->deps.begin(),
+		     i_end = dep->deps.end(); i != i_end; ++i)
+		{
+			db << ' ' << escape_string(*i);
 		}
 		db << std::endl;
 	}
@@ -1141,31 +1163,58 @@ static status_t const &get_status(std::string const &target)
 {
 	std::pair<status_map::iterator,bool> i =
 		status.insert(std::make_pair(target, status_t()));
-	if (!i.second) return i.first->second;
-	DEBUG_open << "Checking status of " << target << "... ";
-	struct stat s;
 	status_t &ts = i.first->second;
-	if (stat(target.c_str(), &s) != 0)
+	if (!i.second) return ts;
+	DEBUG_open << "Checking status of " << target << "... ";
+	dependency_map::const_iterator j = dependencies.find(target);
+	if (j == dependencies.end())
 	{
-		ts.status = Todo;
-		DEBUG_close << "missing\n";
-		return ts;
-	}
-	string_set const &dep = deps[target];
-	for (string_set::const_iterator k = dep.begin(),
-	     k_end = dep.end(); k != k_end; ++k)
-	{
-		status_t const &ts_ = get_status(*k);
-		if (ts_.status != Uptodate || ts_.last > s.st_mtime)
+		struct stat s;
+		if (stat(target.c_str(), &s) != 0)
 		{
+			DEBUG_close << "missing\n";
 			ts.status = Todo;
-			DEBUG_close << "obsolete due to " << *k << std::endl;
 			return ts;
 		}
+		DEBUG_close << "up-to-date\n";
+		ts.status = Uptodate;
+		ts.last = s.st_mtime;
+		return ts;
 	}
-	ts.status = Uptodate;
-	ts.last = s.st_mtime;
-	DEBUG_close << "up-to-date\n";
+	dependency_t const &dep = *j->second;
+	status_e st = Todo;
+	time_t oldest;
+	bool first = true;
+	for (string_list::const_iterator k = dep.targets.begin(),
+	     k_end = dep.targets.end(); k != k_end; ++k, first = false)
+	{
+		struct stat s;
+		if (stat(k->c_str(), &s) != 0)
+		{
+			DEBUG_close << *k << " missing\n";
+			goto update;
+		}
+		status[*k].last = s.st_mtime;
+		if (first || s.st_mtime < oldest) oldest = s.st_mtime;
+	}
+	for (string_set::const_iterator k = dep.deps.begin(),
+	     k_end = dep.deps.end(); k != k_end; ++k)
+	{
+		status_t const &ts_ = get_status(*k);
+		if (ts_.status != Uptodate || ts_.last > oldest)
+		{
+			DEBUG_close << "obsolete due to " << *k << std::endl;
+			goto update;
+		}
+	}
+	DEBUG_close << "all siblings up-to-date\n";
+	st = Uptodate;
+	update:
+	for (string_list::const_iterator k = dep.targets.begin(),
+	     k_end = dep.targets.end(); k != k_end; ++k)
+	{
+		status[*k].status = st;
+	}
 	return ts;
 }
 
@@ -1330,13 +1379,14 @@ static bool start(std::string const &target, client_list::iterator &current)
 		std::cerr << "No rule for building " << target << std::endl;
 		return false;
 	}
+	ref_ptr<dependency_t> dep;
+	dep->targets = rule.targets;
+	dep->deps.insert(rule.deps.begin(), rule.deps.end());
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i)
 	{
 		status[*i].status = Running;
-		string_set &dep = deps[*i];
-		dep.clear();
-		dep.insert(rule.deps.begin(), rule.deps.end());
+		dependencies[*i] = dep;
 	}
 	int job_id = job_counter++;
 	job_targets[job_id] = rule.targets;
@@ -1613,6 +1663,7 @@ void accept_client()
 	DEBUG << "receiving request from job " << job_id << std::endl;
 
 	// Parse the targets and mark them as dependencies from the job targets.
+	dependency_t &dep = *dependencies[job_targets[job_id].front()];
 	char const *p = &buf[0] + sizeof(int);
 	while (true)
 	{
@@ -1625,12 +1676,7 @@ void accept_client()
 		std::string target(p, p + len);
 		DEBUG << "adding dependency " << target << " to job\n";
 		proc->pending.push_back(target);
-		string_list const &l = job_targets[job_id];
-		for (string_list::const_iterator i = l.begin(),
-		     i_end = l.end(); i != i_end; ++i)
-		{
-			deps[*i].insert(target);
-		}
+		dep.deps.insert(target);
 		p += len + 1;
 	}
 }
