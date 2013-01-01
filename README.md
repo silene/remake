@@ -119,8 +119,42 @@ shell variables there.
 
 Note that functions are ignored inside scripts.
 
-Understanding rules
--------------------
+Semantics
+---------
+
+### When are targets obsolete?
+
+A target is obsolete:
+
+- if there is no file corresponding to the target, or to one of its siblings
+  in a multi-target rule,
+- if any of its dynamic dependencies from a previous run or any of its static
+  prerequisites is obsolete,
+- if the latest file corresponding to its siblings or itself is older than any
+  of its dynamic dependencies or static prerequisites.
+
+In all the other cases, it is assumed to be up-to-date (and so are all its
+siblings). Note that the last rule above says "latest" and not "earliest". While
+it might cause some obsolete targets to go unnoticed in corner cases, it allows
+for the following kind of rules:
+
+	config.h stamp-config_h: config.h.in config.status
+		./config.status config.h
+		touch stamp-config_h
+
+A <tt>config.status</tt> file generally does not update header files (here
+<tt>config.h</tt>) if they would not change. As a consequence, if not for the
+<tt>stamp-config\_h</tt> file above, a header would always be considered obsolete
+once one of its prerequisites is modified. Note that touching <tt>config.h</tt>
+rather than <tt>stamp-config\_h</tt> would defeat the point of not updating it
+in the first place, since the program files would need to be rebuilt.
+
+Once all the static prerequisites of a target have been rebuilt, <b>remake</b>
+checks if the target still needs to be built. If it was obsolete only because
+its dependencies needed to be rebuilt and none of them changed, the target is
+assumed to be up-to-date.
+
+### How are targets (re)built?
 
 There are two kinds of rules. If any of the targets or prerequisites contains
 a <tt>%</tt> character, the rule is said to be <em>generic</em>. All the
