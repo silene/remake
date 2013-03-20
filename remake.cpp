@@ -1901,7 +1901,7 @@ void server_mode(string_list const &targets)
 	load_dependencies();
 	load_rules();
 	create_server();
-	if (get_status("Remakefile").status == Todo)
+	if (get_status("Remakefile").status != Uptodate)
 	{
 		clients.push_back(client_t());
 		clients.back().pending.push_back("Remakefile");
