@@ -308,8 +308,14 @@ GNU General Public License for more details.
 #include <ctime>
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#ifdef __APPLE__
+#define MACOSX
+#endif
 
 #ifdef WINDOWS
 #include <windows.h>
@@ -317,13 +323,16 @@ GNU General Public License for more details.
 #include <winsock2.h>
 #define pid_t HANDLE
 typedef SOCKET socket_t;
-enum { MSG_NOSIGNAL = 0 };
 #else
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 typedef int socket_t;
 enum { INVALID_SOCKET = -1 };
+#endif
+
+#if defined(WINDOWS) || defined(MACOSX)
+enum { MSG_NOSIGNAL = 0 };
 #endif
 
 typedef std::list<std::string> string_list;
@@ -1677,7 +1686,9 @@ static void create_server()
 	{
 		error:
 		perror("Failed to create server");
+#ifndef WINDOWS
 		error2:
+#endif
 		exit(1);
 	}
 	DEBUG_open << "Creating server... ";
@@ -1728,8 +1739,14 @@ static void create_server()
 	if (setenv("REMAKE_SOCKET", socket_name, 1)) goto error;
 
 	// Create and listen to the socket.
+#ifdef MACOSX
+	socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (socket_fd < 0) goto error;
+	if (fcntl(socket_fd, F_SETFD, FD_CLOEXEC) < 0) goto error;
+#else
 	socket_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	if (socket_fd < 0) goto error;
+#endif
 	if (bind(socket_fd, (struct sockaddr *)&socket_addr, len))
 		goto error;
 	if (listen(socket_fd, 1000)) goto error;
@@ -1758,6 +1775,10 @@ void accept_client()
 	// WSAEventSelect puts sockets into nonblocking mode, so disable it here.
 	u_long nbio = 0;
 	if (ioctlsocket(fd, FIONBIO, &nbio)) goto error2;
+#elif defined(MACOSX)
+	int fd = accept(socket_fd, NULL, NULL);
+	if (fd < 0) return;
+	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) return;
 #else
 	int fd = accept4(socket_fd, NULL, NULL, SOCK_CLOEXEC);
 	if (fd < 0) return;
@@ -1960,6 +1981,11 @@ void client_mode(char *socket_name, string_list const &targets)
 	strcpy(socket_addr.sun_path, socket_name);
 	if (connect(socket_fd, (struct sockaddr *)&socket_addr, sizeof(socket_addr.sun_family) + len))
 		goto error;
+#ifdef MACOSX
+	int set_option = 1;
+	if (setsockopt(socket_fd, SOL_SOCKET, SO_NOSIGPIPE, &set_option, sizeof(set_option)))
+		goto error;
+#endif
 #endif
 
 	// Send current job id.
