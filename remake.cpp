@@ -49,13 +49,17 @@ lies in the fact that they can be computed on the fly:
 @verbatim
 %.o : %.c
 	gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
-	read DEPS < $1.d
-	remake ${DEPS#*:}
+	cat $1.d | remake -r
 	rm $1.d
 
 %.cmo : %.ml
-	remake $(ocamldep ${1%.cmo}.ml | sed -n -e "\\,^.*: *\$, b; \\,$1:, { b feed2; :feed1 N; :feed2 s/[\\]\$//; t feed1; s/.*://; s/[ \\t\\r\\n]*\\([ \\t\\r\\n]\\+\\)/\\1\n/g; s/\\n\$//; p; q}")
+	ocamldep ${1%.cmo}.ml | remake -r $1
 	ocamlc -c ${1%.cmo}.ml
+
+after.xml: before.xml rules.xsl
+	xsltproc --load-trace -o after.xml rules.xsl before.xml 2> deps
+	remake $(sed -n -e "\\,//,! s,^.*URL=\"\\([^\"]*\\).*\$,\\1,p" deps)
+	rm deps
 @endverbatim
 
 Note that the first rule fails if any of the header files included by
@@ -74,6 +78,7 @@ Options:
 - <tt>-j[N]</tt>, <tt>--jobs=[N]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
+- <tt>-r</tt>: Look up targets from the dependencies on standard input.
 - <tt>-s</tt>, <tt>--silent</tt>, <tt>--quiet</tt>: Do not echo targets.
 
 \section sec-syntax Syntax
@@ -935,17 +940,10 @@ static string_list read_words(std::istream &in)
 }
 
 /**
- * Load known dependencies from file <tt>.remake</tt>.
+ * Load dependencies from @a in.
  */
-static void load_dependencies()
+static void load_dependencies(std::istream &in)
 {
-	DEBUG_open << "Loading database... ";
-	std::ifstream in(".remake");
-	if (!in.good())
-	{
-		DEBUG_close << "not found\n";
-		return;
-	}
 	while (!in.eof())
 	{
 		string_list targets = read_words(in);
@@ -967,6 +965,21 @@ static void load_dependencies()
 		}
 		skip_eol(in);
 	}
+}
+
+/**
+ * Load known dependencies from file <tt>.remake</tt>.
+ */
+static void load_dependencies()
+{
+	DEBUG_open << "Loading database... ";
+	std::ifstream in(".remake");
+	if (!in.good())
+	{
+		DEBUG_close << "not found\n";
+		return;
+	}
+	load_dependencies(in);
 }
 
 /**
@@ -2091,6 +2104,7 @@ void usage(int exit_status)
 		"  -h, --help             Print this message and exit.\n"
 		"  -j[N], --jobs=[N]      Allow N jobs at once; infinite jobs with no arg.\n"
 		"  -k                     Keep going when some targets cannot be made.\n"
+		"  -r                     Look up targets from the dependencies on standard input.\n"
 		"  -s, --silent, --quiet  Do not echo targets.\n";
 	exit(exit_status);
 }
@@ -2111,6 +2125,7 @@ int main(int argc, char *argv[])
 	init_working_dir();
 
 	string_list targets;
+	bool indirect_targets = false;
 
 	// Parse command-line arguments.
 	for (int i = 1; i < argc; ++i)
@@ -2125,6 +2140,8 @@ int main(int argc, char *argv[])
 			keep_going = true;
 		else if (arg == "-s" || arg == "--silent" || arg == "--quiet")
 			show_targets = false;
+		else if (arg == "-r")
+			indirect_targets = true;
 		else if (arg.compare(0, 2, "-j") == 0)
 			max_active_jobs = atoi(arg.c_str() + 2);
 		else if (arg.compare(0, 7, "--jobs=") == 0)
@@ -2135,6 +2152,30 @@ int main(int argc, char *argv[])
 			targets.push_back(normalize(arg));
 			DEBUG << "New target: " << arg << '\n';
 		}
+	}
+
+	if (indirect_targets)
+	{
+		load_dependencies(std::cin);
+		string_list l;
+		targets.swap(l);
+		if (l.empty() && !dependencies.empty())
+		{
+			l.push_back(dependencies.begin()->second->targets.front());
+		}
+		for (string_list::const_iterator i = l.begin(),
+		     i_end = l.end(); i != i_end; ++i)
+		{
+			dependency_map::const_iterator j = dependencies.find(*i);
+			if (j == dependencies.end()) continue;
+			dependency_t const &dep = *j->second;
+			for (string_set::const_iterator k = dep.deps.begin(),
+			     k_end = dep.deps.end(); k != k_end; ++k)
+			{
+				targets.push_back(normalize(*k));
+			}
+		}
+		dependencies.clear();
 	}
 
 #ifdef WINDOWS

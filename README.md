@@ -44,13 +44,17 @@ lies in the fact that they can be computed on the fly:
 
 	%.o : %.c
 		gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
-		read DEPS < $1.d
-		remake ${DEPS#*:}
+		cat $1.d | remake -r
 		rm $1.d
 
 	%.cmo : %.ml
-		remake $(ocamldep ${1%.cmo}.ml | sed -n -e "\\,^.*: *\$, b; \\,$1:, { b feed2; :feed1 N; :feed2 s/[\\]\$//; t feed1; s/.*://; s/[ \\t\\r\\n]*\\([ \\t\\r\\n]\\+\\)/\\1\n/g; s/\\n\$//; p; q}")
+		ocamldep ${1%.cmo}.ml | remake -r $1
 		ocamlc -c ${1%.cmo}.ml
+
+	after.xml: before.xml rules.xsl
+		xsltproc --load-trace -o after.xml rules.xsl before.xml 2> deps
+		remake $(sed -n -e "\\,//,! s,^.*URL=\"\\([^\"]*\\).*\$,\\1,p" deps)
+		rm deps
 
 Note that the first rule fails if any of the header files included by
 a C source file has to be automatically generated. In that case, one
@@ -69,6 +73,7 @@ Options:
 - <tt>-j\[N\]</tt>, <tt>--jobs=\[N\]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
+- <tt>-r</tt>: Look up targets from the dependencies on standard input.
 - <tt>-s</tt>, <tt>--silent</tt>, <tt>--quiet</tt>: Do not echo targets.
 
 Syntax
