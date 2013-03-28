@@ -666,7 +666,7 @@ void init_working_dir()
 	if (!res)
 	{
 		perror("Failed to get working directory");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	working_dir = buf;
 }
@@ -865,7 +865,7 @@ static void execute_function(std::istream &in, std::string const &name, string_l
 	{
 		error:
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	skip_spaces(in);
 	std::string s = read_word(in);
@@ -902,7 +902,7 @@ static string_list read_words(std::istream &in)
 	{
 		error:
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	string_list res;
 	while (true)
@@ -954,7 +954,7 @@ static void load_dependencies()
 		if (in.get() != ':')
 		{
 			std::cerr << "Failed to load database" << std::endl;
-			exit(1);
+			exit(EXIT_FAILURE);
 		}
 		ref_ptr<dependency_t> dep;
 		dep->targets = targets;
@@ -981,7 +981,7 @@ static void load_rule(std::istream &in, std::string const &first)
 		error:
 		DEBUG_close << "failed\n";
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	rule_t rule;
 
@@ -1081,7 +1081,7 @@ static void load_rule(std::istream &in, std::string const &first)
 		if (j.second) continue;
 		std::cerr << "Failed to load rules: " << *i
 			<< " cannot be the target of several rules" << std::endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 }
 
@@ -1123,13 +1123,13 @@ static void load_rules()
 	{
 		error:
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	std::ifstream in("Remakefile");
 	if (!in.good())
 	{
 		std::cerr << "Failed to load rules: no Remakefile found" << std::endl;
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	skip_eol(in);
 
@@ -1549,7 +1549,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	std::ostringstream buf;
 	buf << job_id;
 	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
-		_exit(1);
+		_exit(EXIT_FAILURE);
 	int num = echo_scripts ? 4 : 3;
 	char const **argv = new char const *[num + rule.targets.size() + 1];
 	argv[0] = "sh";
@@ -1569,7 +1569,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	}
 	close(pfd[1]);
 	execv("/bin/sh", (char **)argv);
-	_exit(1);
+	_exit(EXIT_FAILURE);
 #endif
 }
 
@@ -1757,7 +1757,7 @@ static void create_server()
 #ifndef WINDOWS
 		error2:
 #endif
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
 	DEBUG_open << "Creating server... ";
 
@@ -2011,7 +2011,7 @@ void server_mode(string_list const &targets)
 	close(socket_fd);
 	remove(socket_name);
 	save_dependencies();
-	exit(build_failure ? 1 : 0);
+	exit(build_failure ? EXIT_FAILURE : EXIT_SUCCESS);
 }
 
 /**
@@ -2024,9 +2024,9 @@ void client_mode(char *socket_name, string_list const &targets)
 	{
 		error:
 		perror("Failed to send targets to server");
-		exit(1);
+		exit(EXIT_FAILURE);
 	}
-	if (targets.empty()) exit(0);
+	if (targets.empty()) exit(EXIT_SUCCESS);
 	DEBUG_open << "Connecting to server... ";
 
 	// Connect to server.
@@ -2042,7 +2042,7 @@ void client_mode(char *socket_name, string_list const &targets)
 #else
 	struct sockaddr_un socket_addr;
 	size_t len = strlen(socket_name);
-	if (len >= sizeof(socket_addr.sun_path) - 1) exit(1);
+	if (len >= sizeof(socket_addr.sun_path) - 1) exit(EXIT_FAILURE);
 	socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (socket_fd < 0) goto error;
 	socket_addr.sun_family = AF_UNIX;
@@ -2075,8 +2075,8 @@ void client_mode(char *socket_name, string_list const &targets)
 	// Send terminating nul and wait for reply.
 	char result = 0;
 	if (send(socket_fd, &result, 1, MSG_NOSIGNAL) != 1) goto error;
-	if (recv(socket_fd, &result, 1, 0) != 1) exit(1);
-	exit(result ? 0 : 1);
+	if (recv(socket_fd, &result, 1, 0) != 1) exit(EXIT_FAILURE);
+	exit(result ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
 /**
@@ -2116,8 +2116,8 @@ int main(int argc, char *argv[])
 	for (int i = 1; i < argc; ++i)
 	{
 		std::string arg = argv[i];
-		if (arg.empty()) usage(1);
-		if (arg == "-h" || arg == "--help") usage(0);
+		if (arg.empty()) usage(EXIT_FAILURE);
+		if (arg == "-h" || arg == "--help") usage(EXIT_SUCCESS);
 		if (arg == "-d")
 			if (echo_scripts) debug.active = true;
 			else echo_scripts = true;
