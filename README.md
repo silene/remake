@@ -68,6 +68,7 @@ Options:
 - <tt>-j\[N\]</tt>, <tt>--jobs=\[N\]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
+- <tt>-s</tt>, <tt>--silent</tt>, <tt>--quiet</tt>: Do not echo targets.
 
 Syntax
 ------

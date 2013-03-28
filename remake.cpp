@@ -73,6 +73,7 @@ Options:
 - <tt>-j[N]</tt>, <tt>--jobs=[N]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
+- <tt>-s</tt>, <tt>--silent</tt>, <tt>--quiet</tt>: Do not echo targets.
 
 \section sec-syntax Syntax
 
@@ -557,6 +558,11 @@ static char *socket_name;
  * Name of the first target of the first specific rule, used for default run.
  */
 static std::string first_target;
+
+/**
+ * Whether a short message should be displayed for each target.
+ */
+static bool show_targets = true;
 
 static time_t now = time(NULL);
 
@@ -1433,6 +1439,17 @@ static void complete_job(int job_id, bool success)
  */
 static bool run_script(int job_id, rule_t const &rule)
 {
+	if (show_targets)
+	{
+		std::cout << "Building";
+		for (string_list::const_iterator i = rule.targets.begin(),
+		     i_end = rule.targets.end(); i != i_end; ++i)
+		{
+			std::cout << ' ' << *i;
+		}
+		std::cout << std::endl;
+	}
+
 	ref_ptr<dependency_t> dep;
 	dep->targets = rule.targets;
 	dep->deps.insert(rule.deps.begin(), rule.deps.end());
@@ -2061,10 +2078,11 @@ void usage(int exit_status)
 {
 	std::cerr << "Usage: remake [options] [target] ...\n"
 		"Options\n"
-		"  -d                 Print lots of debugging information.\n"
-		"  -h, --help         Print this message and exit.\n"
-		"  -j[N], --jobs=[N]  Allow N jobs at once; infinite jobs with no arg.\n"
-		"  -k                 Keep going when some targets cannot be made.\n";
+		"  -d                     Print lots of debugging information.\n"
+		"  -h, --help             Print this message and exit.\n"
+		"  -j[N], --jobs=[N]      Allow N jobs at once; infinite jobs with no arg.\n"
+		"  -k                     Keep going when some targets cannot be made.\n"
+		"  -s, --silent, --quiet  Do not echo targets.\n";
 	exit(exit_status);
 }
 
@@ -2095,6 +2113,8 @@ int main(int argc, char *argv[])
 			debug.active = true;
 		else if (arg == "-k" || arg =="--keep-going")
 			keep_going = true;
+		else if (arg == "-s" || arg == "--silent" || arg == "--quiet")
+			show_targets = false;
 		else if (arg.compare(0, 2, "-j") == 0)
 			max_active_jobs = atoi(arg.c_str() + 2);
 		else if (arg.compare(0, 7, "--jobs=") == 0)

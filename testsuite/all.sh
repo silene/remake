@@ -2,7 +2,7 @@
 
 rm -rf sandbox
 
-export REMAKE=$PWD/../remake
+export REMAKE="$PWD/../remake -s"
 
 if [ "x$1" = x ]; then TESTS=t*.sh; else TESTS=$1; fi
 
