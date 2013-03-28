@@ -70,6 +70,7 @@ Usage: <tt>remake <i>options</i> <i>targets</i></tt>
 
 Options:
 
+- <tt>-d</tt>: Echo script commands.
 - <tt>-j[N]</tt>, <tt>--jobs=[N]</tt>: Allow N jobs at once; infinite jobs
   with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
@@ -563,6 +564,11 @@ static std::string first_target;
  * Whether a short message should be displayed for each target.
  */
 static bool show_targets = true;
+
+/**
+ * Whether script commands are echoed.
+ */
+static bool echo_scripts = false;
 
 static time_t now = time(NULL);
 
@@ -1491,6 +1497,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		goto error2;
 	std::ostringstream argv;
 	argv << "SH.EXE -e -s";
+	if (echo_scripts) argv << " -v";
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i)
 	{
@@ -1543,11 +1550,12 @@ static bool run_script(int job_id, rule_t const &rule)
 	buf << job_id;
 	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
 		_exit(1);
-	char const **argv = new char const *[4 + rule.targets.size()];
+	int num = echo_scripts ? 4 : 3;
+	char const **argv = new char const *[num + rule.targets.size() + 1];
 	argv[0] = "sh";
 	argv[1] = "-e";
 	argv[2] = "-s";
-	int num = 3;
+	if (echo_scripts) argv[3] = "-v";
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i, ++num)
 	{
@@ -2078,7 +2086,8 @@ void usage(int exit_status)
 {
 	std::cerr << "Usage: remake [options] [target] ...\n"
 		"Options\n"
-		"  -d                     Print lots of debugging information.\n"
+		"  -d                     Echo script commands.\n"
+		"  -d -d                  Print lots of debugging information.\n"
 		"  -h, --help             Print this message and exit.\n"
 		"  -j[N], --jobs=[N]      Allow N jobs at once; infinite jobs with no arg.\n"
 		"  -k                     Keep going when some targets cannot be made.\n"
@@ -2110,7 +2119,8 @@ int main(int argc, char *argv[])
 		if (arg.empty()) usage(1);
 		if (arg == "-h" || arg == "--help") usage(0);
 		if (arg == "-d")
-			debug.active = true;
+			if (echo_scripts) debug.active = true;
+			else echo_scripts = true;
 		else if (arg == "-k" || arg =="--keep-going")
 			keep_going = true;
 		else if (arg == "-s" || arg == "--silent" || arg == "--quiet")
