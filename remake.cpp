@@ -560,6 +560,8 @@ static std::string first_target;
 
 static time_t now = time(NULL);
 
+static std::string working_dir;
+
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
 
@@ -643,6 +645,41 @@ static std::string escape_string(std::string const &s)
 }
 
 /**
+ * Initialize #working_dir.
+ */
+void init_working_dir()
+{
+	char buf[1024];
+	char *res = getcwd(buf, sizeof(buf));
+	if (!res)
+	{
+		perror("Failed to get working directory");
+		exit(1);
+	}
+	working_dir = buf;
+}
+
+/**
+ * Normalize an absolute path with respect to the working directory.
+ * Paths outside the working subtree are left unchanged.
+ */
+static std::string normalize_abs(std::string const &s)
+{
+	size_t l = working_dir.length();
+	if (s.compare(0, l, working_dir)) return s;
+	size_t ll = s.length();
+	if (ll == l) return ".";
+	if (s[l] != '/')
+	{
+		size_t pos = s.rfind('/', l);
+		assert(pos != std::string::npos);
+		return s.substr(pos + 1);
+	}
+	if (ll == l + 1) return ".";
+	return s.substr(l + 1);
+}
+
+/**
  * Normalize a target name.
  */
 static std::string normalize(std::string const &s)
@@ -655,6 +692,7 @@ static std::string normalize(std::string const &s)
 	size_t prev = 0, len = s.length();
 	size_t pos = s.find_first_of(delim);
 	if (pos == std::string::npos) return s;
+	bool absolute = pos == 0;
 	string_list l;
 	for (;;)
 	{
@@ -664,6 +702,8 @@ static std::string normalize(std::string const &s)
 			if (n == "..")
 			{
 				if (!l.empty()) l.pop_back();
+				else if (!absolute)
+					return normalize(working_dir + '/' + s);
 			}
 			else if (n != ".")
 				l.push_back(n);
@@ -675,13 +715,16 @@ static std::string normalize(std::string const &s)
 		if (pos == std::string::npos) pos = len;
 	}
 	string_list::const_iterator i = l.begin(), i_end = l.end();
-	if (i == i_end) return ".";
-	std::string n(*i);
+	if (i == i_end) return absolute ? "/" : ".";
+	std::string n;
+	if (absolute) n.push_back('/');
+	n.append(*i);
 	for (++i; i != i_end; ++i)
 	{
 		n.push_back('/');
 		n.append(*i);
 	}
+	if (absolute) return normalize_abs(n);
 	return n;
 }
 
@@ -2038,6 +2081,8 @@ void usage(int exit_status)
  */
 int main(int argc, char *argv[])
 {
+	init_working_dir();
+
 	string_list targets;
 
 	// Parse command-line arguments.
