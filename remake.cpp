@@ -873,18 +873,29 @@ static void execute_function(std::istream &in, std::string const &name, string_l
 		exit(EXIT_FAILURE);
 	}
 	skip_spaces(in);
-	std::string s = read_word(in);
+	string_list fix = read_words(in);
 	if (next_token(in) != Comma) goto error;
 	in.ignore(1);
 	string_list names = read_words(in);
 	if (next_token(in) != Rightpar) goto error;
 	in.ignore(1);
+	size_t fixl = fix.size();
 	if (name == "addprefix")
 	{
 		for (string_list::const_iterator i = names.begin(),
 		     i_end = names.end(); i != i_end; ++i)
 		{
-			dest.push_back(s + *i);
+			if (!fixl)
+			{
+				dest.push_back(*i);
+				continue;
+			}
+			string_list::const_iterator k = fix.begin();
+			for (size_t j = 1; j != fixl; ++j)
+			{
+				dest.push_back(*k++);
+			}
+			dest.push_back(*k++ + *i);
 		}
 	}
 	else if (name == "addsuffix")
@@ -892,7 +903,17 @@ static void execute_function(std::istream &in, std::string const &name, string_l
 		for (string_list::const_iterator i = names.begin(),
 		     i_end = names.end(); i != i_end; ++i)
 		{
-			dest.push_back(*i + s);
+			if (!fixl)
+			{
+				dest.push_back(*i);
+				continue;
+			}
+			string_list::const_iterator k = fix.begin();
+			dest.push_back(*i + *k++);
+			for (size_t j = 1; j != fixl; ++j)
+			{
+				dest.push_back(*k++);
+			}
 		}
 	}
 	else goto error;
