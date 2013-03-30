@@ -217,7 +217,7 @@ The set of rules from <b>Remakefile</b> is ill-formed:
 
 \section sec-compilation Compilation
 
-- On Linux: <tt>g++ -o remake remake.cpp</tt>
+- On Linux, MacOSX, and BSD: <tt>g++ -o remake remake.cpp</tt>
 - On Windows: <tt>g++ -o remake.exe remake.cpp -lws2_32</tt>
 
 Installing <b>remake</b> is needed only if <b>Remakefile</b> does not
@@ -283,7 +283,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.2
+@version 0.3
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify

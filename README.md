@@ -207,7 +207,7 @@ The set of rules from <b>Remakefile</b> is ill-formed:
 Compilation
 -----------
 
-- On Linux: <tt>g++ -o remake remake.cpp</tt>
+- On Linux, MacOSX, and BSD: <tt>g++ -o remake remake.cpp</tt>
 - On Windows: <tt>g++ -o remake.exe remake.cpp -lws2_32</tt>
 
 Installing <b>remake</b> is needed only if <b>Remakefile</b> does not
