@@ -49,7 +49,7 @@ lies in the fact that they can be computed on the fly:
 @verbatim
 %.o : %.c
 	gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
-	cat $1.d | remake -r
+	remake -r < $1.d
 	rm $1.d
 
 %.cmo : %.ml
