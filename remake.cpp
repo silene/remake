@@ -342,7 +342,7 @@ typedef int socket_t;
 enum { INVALID_SOCKET = -1 };
 #endif
 
-#ifndef LINUX
+#if defined(WINDOWS) || defined(MACOSX)
 enum { MSG_NOSIGNAL = 0 };
 #endif
 
@@ -2087,7 +2087,7 @@ void client_mode(char *socket_name, string_list const &targets)
 	strcpy(socket_addr.sun_path, socket_name);
 	if (connect(socket_fd, (struct sockaddr *)&socket_addr, sizeof(socket_addr.sun_family) + len))
 		goto error;
-#ifndef LINUX
+#ifdef MACOSX
 	int set_option = 1;
 	if (setsockopt(socket_fd, SOL_SOCKET, SO_NOSIGPIPE, &set_option, sizeof(set_option)))
 		goto error;
