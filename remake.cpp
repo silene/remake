@@ -324,6 +324,10 @@ GNU General Public License for more details.
 #define MACOSX
 #endif
 
+#ifdef __linux__
+#define LINUX
+#endif
+
 #ifdef WINDOWS
 #include <windows.h>
 #include <winbase.h>
@@ -338,7 +342,7 @@ typedef int socket_t;
 enum { INVALID_SOCKET = -1 };
 #endif
 
-#if defined(WINDOWS) || defined(MACOSX)
+#ifndef LINUX
 enum { MSG_NOSIGNAL = 0 };
 #endif
 
@@ -349,7 +353,7 @@ typedef std::set<std::string> string_set;
 /**
  * Reference-counted shared object.
  * @note The default constructor delays the creation of the object until it
- *       is first deferenced.
+ *       is first dereferenced.
  */
 template<class T>
 struct ref_ptr
@@ -1841,13 +1845,13 @@ static void create_server()
 	if (setenv("REMAKE_SOCKET", socket_name, 1)) goto error;
 
 	// Create and listen to the socket.
-#ifdef MACOSX
+#ifdef LINUX
+	socket_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (socket_fd < 0) goto error;
+#else
 	socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (socket_fd < 0) goto error;
 	if (fcntl(socket_fd, F_SETFD, FD_CLOEXEC) < 0) goto error;
-#else
-	socket_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-	if (socket_fd < 0) goto error;
 #endif
 	if (bind(socket_fd, (struct sockaddr *)&socket_addr, len))
 		goto error;
@@ -1877,13 +1881,13 @@ void accept_client()
 	// WSAEventSelect puts sockets into nonblocking mode, so disable it here.
 	u_long nbio = 0;
 	if (ioctlsocket(fd, FIONBIO, &nbio)) goto error2;
-#elif defined(MACOSX)
+#elif defined(LINUX)
+	int fd = accept4(socket_fd, NULL, NULL, SOCK_CLOEXEC);
+	if (fd < 0) return;
+#else
 	int fd = accept(socket_fd, NULL, NULL);
 	if (fd < 0) return;
 	if (fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) return;
-#else
-	int fd = accept4(socket_fd, NULL, NULL, SOCK_CLOEXEC);
-	if (fd < 0) return;
 #endif
 	clients.push_front(client_t());
 	client_list::iterator proc = clients.begin();
@@ -2083,7 +2087,7 @@ void client_mode(char *socket_name, string_list const &targets)
 	strcpy(socket_addr.sun_path, socket_name);
 	if (connect(socket_fd, (struct sockaddr *)&socket_addr, sizeof(socket_addr.sun_family) + len))
 		goto error;
-#ifdef MACOSX
+#ifndef LINUX
 	int set_option = 1;
 	if (setsockopt(socket_fd, SOL_SOCKET, SO_NOSIGPIPE, &set_option, sizeof(set_option)))
 		goto error;
