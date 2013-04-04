@@ -283,7 +283,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.3
+@version 0.4
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify
@@ -1639,7 +1639,7 @@ static bool start(std::string const &target, client_list::iterator &current)
 	{
 		current = clients.insert(current, client_t());
 		current->job_id = job_id;
-		std::swap(current->pending, rule.deps);
+		current->pending = rule.deps;
 		current->delayed = new rule_t(rule);
 		return true;
 	}
