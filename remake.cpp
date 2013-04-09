@@ -283,7 +283,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.4
+@version 0.5
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify
@@ -957,6 +957,7 @@ static string_list read_words(std::istream &in)
 					res.insert(res.end(), i->second.begin(), i->second.end());
 			}
 			else execute_function(in, name, res);
+			break;
 		}
 		default:
 			return res;
