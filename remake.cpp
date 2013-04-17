@@ -439,7 +439,7 @@ typedef std::map<int, string_list> job_targets_map;
 typedef std::map<pid_t, int> pid_job_map;
 
 /**
- * Client waiting for a request complete.
+ * Client waiting for a request to complete.
  *
  * There are two kinds of clients:
  * - real clients, which are instances of remake created by built scripts,
@@ -1289,7 +1289,7 @@ static rule_t find_rule(std::string const &target)
 		if (i != i_end) return *i->second;
 		return grule;
 	}
-	// Optimize the lookup when there is only one target (alread looked up).
+	// Optimize the lookup when there is only one target (already looked up).
 	if (grule.targets.size() == 1)
 	{
 		if (i != i_end)
