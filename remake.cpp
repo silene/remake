@@ -1699,11 +1699,15 @@ static bool has_free_slots()
  * - complete the request if there are neither running nor pending targets
  *   left or if any of them failed.
  *
+ * @return true if some child processes are still running.
+ *
  * @post If there are pending requests, at least one child process is running.
  */
-static void handle_clients()
+static bool handle_clients()
 {
 	DEBUG_open << "Handling client requests... ";
+	restart:
+
 	for (client_list::iterator i = clients.begin(), i_next = i,
 	     i_end = clients.end(); i != i_end && has_free_slots(); i = i_next)
 	{
@@ -1766,7 +1770,7 @@ static void handle_clients()
 				client_list::iterator j = i;
 				if (!start(target, i)) goto pending_failed;
 				j->running.insert(target);
-				if (!has_free_slots()) return;
+				if (!has_free_slots()) return true;
 				// Job start might insert a dependency client.
 				i_next = i;
 				++i_next;
@@ -1774,7 +1778,7 @@ static void handle_clients()
 			}
 		}
 
-		// Try to complete request.
+		// Try to complete the request.
 		// (This might start a new job if it was a dependency client.)
 		if (i->running.empty())
 		{
@@ -1784,6 +1788,18 @@ static void handle_clients()
 			DEBUG_close << "finished\n";
 		}
 	}
+
+	if (running_jobs != waiting_jobs) return true;
+	if (running_jobs == 0 && clients.empty()) return false;
+
+	// There is a circular dependency.
+	// Try to break it by completing one of the requests.
+	assert(!clients.empty());
+	std::cerr << "Circular dependency detected" << std::endl;
+	client_list::iterator i = clients.begin();
+	complete_request(*i, false);
+	clients.erase(i);
+	goto restart;
 }
 
 /**
@@ -1957,14 +1973,8 @@ void accept_client()
  */
 void server_loop()
 {
-	while (true)
+	while (handle_clients())
 	{
-		handle_clients();
-		if (running_jobs == 0)
-		{
-			assert(clients.empty());
-			break;
-		}
 		DEBUG_open << "Handling events... ";
 	#ifdef WINDOWS
 		size_t len = job_pids.size() + 1;
@@ -2022,6 +2032,8 @@ void server_loop()
 		}
 	#endif
 	}
+
+	assert(clients.empty());
 }
 
 /**
