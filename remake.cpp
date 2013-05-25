@@ -1394,7 +1394,7 @@ static void update_status(std::string const &target)
 {
 	DEBUG_open << "Rechecking status of " << target << "... ";
 	status_map::iterator i = status.find(target);
-	assert (i != status.end());
+	assert(i != status.end());
 	status_t &ts = i->second;
 	ts.status = Remade;
 	if (ts.last >= now)
@@ -1427,7 +1427,7 @@ static bool still_need_rebuild(std::string const &target)
 {
 	DEBUG_open << "Rechecking obsoleteness of " << target << "... ";
 	status_map::const_iterator i = status.find(target);
-	assert (i != status.end());
+	assert(i != status.end());
 	if (i->second.status != Recheck) return true;
 	dependency_map::const_iterator j = dependencies.find(target);
 	assert(j != dependencies.end());
