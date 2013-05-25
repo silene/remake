@@ -295,6 +295,46 @@ This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
+
+\section sec-internals Internals
+
+The parent <b>remake</b> process acts as a server. The other ones have a
+REMAKE_SOCKET environment variable that tells them how to contact the
+server. They send the content of the REMAKE_JOB_ID environment variable,
+so that the server can associate the child targets to the jobs that
+spawned them. They then wait for completion and exit with the status
+returned by the server. This is handled by #client_mode.
+
+The server calls #load_dependencies and #save_dependencies to serialize
+dynamic dependencies from <b>.remake</b>. It loads <b>Remakefile</b> with
+#load_rules. It then runs #server_mode, which calls #server_loop.
+
+When building a target, the following sequence of events happens:
+
+- #start calls #find_rule (and #find_generic_rule) to get the rule.
+- It then creates a pseudo-client if the rule has static dependencies, or
+  calls #run_script otherwise. In both cases, a new job is created and its
+  targets are put into #job_targets.
+- #run_script creates a shell process and stores it in #job_pids. It
+  increases #running_jobs.
+- The child process possibly calls <b>remake</b> with a list of targets.
+- #accept_client receives a build request from a child process and adds
+  it to #clients. It also records the new dependencies of the job into
+  #dependencies. It increases #waiting_jobs.
+- #handle_clients uses #get_status to look up the obsoleteness of the
+  targets.
+- Once the targets of a request have been built or one of them has failed,
+  #handle_clients calls #complete_request and removes the request from
+  #clients.
+- If the build targets come from a pseudo-client, #complete_request calls
+  #run_script. Otherwise it sends the reply to the corresponding child
+  process and decreases #waiting_jobs.
+- When a child process ends, #server_loop calls #finalize_job, which
+  removes the process from #job_pids, decreases #running_jobs, and calls
+  #complete_job.
+- #complete_job removes the job from #job_targets and calls #update_status
+  to change the status of the targets. It also removes the target files in
+  case of failure.
 */
 
 #ifdef _WIN32
