@@ -1967,6 +1967,19 @@ void accept_client()
 }
 
 /**
+ * Handle child process exit status.
+ */
+void finalize_job(pid_t pid, bool res)
+{
+	pid_job_map::iterator i = job_pids.find(pid);
+	assert(i != job_pids.end());
+	int job_id = i->second;
+	job_pids.erase(i);
+	--running_jobs;
+	complete_job(job_id, res);
+}
+
+/**
  * Loop until all the jobs have finished.
  *
  * @post There are no client requests left, not even virtual ones.
@@ -2002,12 +2015,7 @@ void server_loop()
 		DWORD s = 0;
 		bool res = GetExitCodeProcess(pid, &s) && s == 0;
 		CloseHandle(pid);
-		pid_job_map::iterator i = job_pids.find(pid);
-		assert(i != job_pids.end());
-		int job_id = i->second;
-		job_pids.erase(i);
-		--running_jobs;
-		complete_job(job_id, res);
+		finalize_job(pid, res);
 	#else
 		sigset_t emptymask;
 		sigemptyset(&emptymask);
@@ -2023,12 +2031,7 @@ void server_loop()
 		while ((pid = waitpid(-1, &status, WNOHANG)) > 0)
 		{
 			bool res = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-			pid_job_map::iterator i = job_pids.find(pid);
-			assert(i != job_pids.end());
-			int job_id = i->second;
-			job_pids.erase(i);
-			--running_jobs;
-			complete_job(job_id, res);
+			finalize_job(pid, res);
 		}
 	#endif
 	}
