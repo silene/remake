@@ -1319,9 +1319,9 @@ static rule_t find_rule(std::string const &target)
  * - if any dependency is obsolete or younger than the file, it is obsolete,
  * - otherwise it is up-to-date.
  *
- * @note With multiple targets, they all share the same status. (If one is
- *       obsolete, they all are.) For the second rule above, the latest target
- *       is chosen, not the oldest!
+ * @note For rules with multiple targets, all the targets share the same
+ *       status. (If one is obsolete, they all are.) The second rule above
+ *       is modified in that case: the latest target is chosen, not the oldest!
  */
 static status_t const &get_status(std::string const &target)
 {
@@ -1693,15 +1693,17 @@ static bool has_free_slots()
 }
 
 /**
- * Update clients as long as there are free slots:
+ * Handle client requests:
  * - check for running targets that have finished,
  * - start as many pending targets as allowed,
  * - complete the request if there are neither running nor pending targets
  *   left or if any of them failed.
+ *
+ * @post If there are pending requests, at least one child process is running.
  */
-static void update_clients()
+static void handle_clients()
 {
-	DEBUG_open << "Updating clients... ";
+	DEBUG_open << "Handling client requests... ";
 	for (client_list::iterator i = clients.begin(), i_next = i,
 	     i_end = clients.end(); i != i_end && has_free_slots(); i = i_next)
 	{
@@ -1950,12 +1952,14 @@ void accept_client()
 
 /**
  * Loop until all the jobs have finished.
+ *
+ * @post There are no client requests left, not even virtual ones.
  */
 void server_loop()
 {
 	while (true)
 	{
-		update_clients();
+		handle_clients();
 		if (running_jobs == 0)
 		{
 			assert(clients.empty());
