@@ -559,10 +559,12 @@ static socket_t socket_fd;
  */
 static bool build_failure;
 
+#ifndef WINDOWS
 /**
  * Name of the server socket in the file system.
  */
 static char *socket_name;
+#endif
 
 /**
  * Name of the first target of the first specific rule, used for default run.
@@ -2048,7 +2050,10 @@ void server_mode(string_list const &targets)
 	server_loop();
 	early_exit:
 	close(socket_fd);
+#ifndef WINDOWS
 	remove(socket_name);
+	free(socket_name);
+#endif
 	save_dependencies();
 	exit(build_failure ? EXIT_FAILURE : EXIT_SUCCESS);
 }
