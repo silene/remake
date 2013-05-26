@@ -1631,6 +1631,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	buf << job_id;
 	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
 		_exit(EXIT_FAILURE);
+	signal(SIGINT, SIG_DFL);
 	int num = echo_scripts ? 4 : 3;
 	char const **argv = new char const *[num + rule.targets.size() + 1];
 	argv[0] = "sh";
@@ -2275,6 +2276,11 @@ int main(int argc, char *argv[])
 		std::cerr << "Unexpected failure while initializing Windows Socket" << std::endl;
 		return 1;
 	}
+#endif
+
+#ifndef WINDOWS
+	// Ignore Ctrl+C and let the shells process it.
+	signal(SIGINT, SIG_IGN);
 #endif
 
 	// Run as client if REMAKE_SOCKET is present in the environment.
