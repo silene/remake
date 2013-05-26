@@ -628,9 +628,16 @@ static std::string working_dir;
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
 
-static void child_sig_handler(int)
+static void sigchld_handler(int)
 {
 	got_SIGCHLD = 1;
+}
+
+static void sigint_handler(int)
+{
+	// Child processes will receive the signal too, so just prevent
+	// new jobs from starting and wait for the running jobs to fail.
+	keep_going = false;
 }
 #endif
 
@@ -1631,7 +1638,6 @@ static bool run_script(int job_id, rule_t const &rule)
 	buf << job_id;
 	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
 		_exit(EXIT_FAILURE);
-	signal(SIGINT, SIG_DFL);
 	int num = echo_scripts ? 4 : 3;
 	char const **argv = new char const *[num + rule.targets.size() + 1];
 	argv[0] = "sh";
@@ -1884,16 +1890,19 @@ static void create_server()
 		goto error;
 	if (listen(socket_fd, 1000)) goto error;
 #else
-	// Set a handler for SIGCHLD then block the signal (unblocked during select).
+	// Set signal handlers for SIGCHLD and SIGINT.
+	// Block SIGCHLD (unblocked during select).
 	sigset_t sigmask;
 	sigemptyset(&sigmask);
 	sigaddset(&sigmask, SIGCHLD);
 	if (sigprocmask(SIG_BLOCK, &sigmask, NULL) == -1) goto error;
 	struct sigaction sa;
 	sa.sa_flags = 0;
-	sa.sa_handler = &child_sig_handler;
 	sigemptyset(&sa.sa_mask);
+	sa.sa_handler = &sigchld_handler;
 	if (sigaction(SIGCHLD, &sa, NULL) == -1) goto error;
+	sa.sa_handler = &sigint_handler;
+	if (sigaction(SIGINT, &sa, NULL) == -1) goto error;
 
 	// Prepare a named unix socket in temporary directory.
 	socket_name = tempnam(NULL, "rmk-");
@@ -2276,11 +2285,6 @@ int main(int argc, char *argv[])
 		std::cerr << "Unexpected failure while initializing Windows Socket" << std::endl;
 		return 1;
 	}
-#endif
-
-#ifndef WINDOWS
-	// Ignore Ctrl+C and let the shells process it.
-	signal(SIGINT, SIG_IGN);
 #endif
 
 	// Run as client if REMAKE_SOCKET is present in the environment.
