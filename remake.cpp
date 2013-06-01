@@ -1088,6 +1088,83 @@ static void load_dependencies()
 }
 
 /**
+ * Register a specific rule with an empty script:
+ *
+ * - Check that none of the targets already has an associated rule with a
+ *   nonempty script.
+ * - Create a new rule with a single target for each target, if needed.
+ * - Add the prerequisites of @a rule to all these associated rules.
+ */
+static void register_transparent_rule(rule_t const &rule)
+{
+	assert(rule.script.empty());
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		std::pair<rule_map::iterator, bool> j =
+			specific_rules.insert(std::make_pair(*i, ref_ptr<rule_t>()));
+		ref_ptr<rule_t> &r = j.first->second;
+		if (j.second)
+		{
+			r = ref_ptr<rule_t>(rule);
+			r->targets = string_list(1, *i);
+			continue;
+		}
+		if (!r->script.empty())
+		{
+			std::cerr << "Failed to load rules: " << *i
+				<< " cannot be the target of several rules" << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		assert(r->targets.size() == 1 && r->targets.front() == *i);
+		r->deps.insert(r->deps.end(), rule.deps.begin(), rule.deps.end());
+	}
+
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		ref_ptr<dependency_t> &dep = dependencies[*i];
+		if (dep->targets.empty()) dep->targets.push_back(*i);
+		dep->deps.insert(rule.deps.begin(), rule.deps.end());
+	}
+}
+
+/**
+ * Register a specific rule with a nonempty script:
+ *
+ * - Check that none of the targets already has an associated rule.
+ * - Create a single shared rule and associate it to all the targets.
+ * - Merge the prerequisites of all the targets into a single set and
+ *   add the prerequisites of the rule to it. (The preexisting
+ *   prerequisites, if any, come from a previous run.)
+ */
+static void register_scripted_rule(rule_t const &rule)
+{
+	ref_ptr<rule_t> r(rule);
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		std::pair<rule_map::iterator, bool> j =
+			specific_rules.insert(std::make_pair(*i, r));
+		if (j.second) continue;
+		std::cerr << "Failed to load rules: " << *i
+			<< " cannot be the target of several rules" << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
+	ref_ptr<dependency_t> dep;
+	dep->targets = rule.targets;
+	dep->deps.insert(rule.deps.begin(), rule.deps.end());
+	for (string_list::const_iterator i = rule.targets.begin(),
+	     i_end = rule.targets.end(); i != i_end; ++i)
+	{
+		ref_ptr<dependency_t> &d = dependencies[*i];
+		dep->deps.insert(d->deps.begin(), d->deps.end());
+		d = dep;
+	}
+}
+
+/**
  * Read a rule starting with target @a first, if nonempty.
  * Store into #generic_rules or #specific_rules depending on its genericity.
  */
@@ -1158,47 +1235,14 @@ static void load_rule(std::istream &in, std::string const &first)
 		return;
 	}
 
-	// Rules with a nonempty script lump all their targets in the same
-	// dependency set, while other rules behave as if they had been
-	// replicated for each of their targets.
 	if (!rule.script.empty())
-	{
-		ref_ptr<dependency_t> dep;
-		dep->targets = rule.targets;
-		dep->deps.insert(rule.deps.begin(), rule.deps.end());
-		for (string_list::const_iterator i = rule.targets.begin(),
-		     i_end = rule.targets.end(); i != i_end; ++i)
-		{
-			ref_ptr<dependency_t> &d = dependencies[*i];
-			dep->deps.insert(d->deps.begin(), d->deps.end());
-			d = dep;
-		}
-	}
+		register_scripted_rule(rule);
 	else
-	{
-		for (string_list::const_iterator i = rule.targets.begin(),
-		     i_end = rule.targets.end(); i != i_end; ++i)
-		{
-			ref_ptr<dependency_t> &dep = dependencies[*i];
-			if (dep->targets.empty()) dep->targets.push_back(*i);
-			dep->deps.insert(rule.deps.begin(), rule.deps.end());
-		}
-	}
+		register_transparent_rule(rule);
 
+	// If there is no default target yet, mark it as such.
 	if (first_target.empty())
 		first_target = rule.targets.front();
-
-	ref_ptr<rule_t> r(rule);
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i)
-	{
-		std::pair<rule_map::iterator,bool> j =
-			specific_rules.insert(std::make_pair(*i, r));
-		if (j.second) continue;
-		std::cerr << "Failed to load rules: " << *i
-			<< " cannot be the target of several rules" << std::endl;
-		exit(EXIT_FAILURE);
-	}
 }
 
 /**
