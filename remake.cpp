@@ -1655,9 +1655,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	for (assign_list::const_iterator i = rule.vars.begin(),
 	     i_end = rule.vars.end(); i != i_end; ++i)
 	{
-		std::pair<variable_map::iterator, bool> j =
-			vars.insert(std::make_pair(i->name, string_list()));
-		string_list &val = j.first->second;
+		string_list &val = vars[i->name];
 		if (!i->append) val.clear();
 		val.insert(val.end(), i->value.begin(), i->value.end());
 	}
