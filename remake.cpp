@@ -821,50 +821,86 @@ static void skip_spaces(std::istream &in)
 }
 
 /**
- * Skip end of line.
+ * Skip empty lines.
  */
-static void skip_eol(std::istream &in)
+static void skip_empty(std::istream &in)
 {
 	char c;
 	while (strchr("\r\n", (c = in.get()))) {}
 	if (in.good()) in.putback(c);
 }
 
-enum token_e { Word, Eol, Eof, Colon, Equal, Dollar, Rightpar, Comma };
+/**
+ * Skip end of line. If @a multi is true, skip the following empty lines too.
+ * @return true if there was a line to end.
+ */
+static bool skip_eol(std::istream &in, bool multi = false)
+{
+	char c = in.get();
+	if (c == '\r') c = in.get();
+	if (c != '\n' && in.good()) in.putback(c);
+	if (c != '\n' && !in.eof()) return false;
+	if (multi) skip_empty(in);
+	return true;
+}
+
+enum
+{
+  Unexpected = 0,
+  Word       = 1 << 1,
+  Colon      = 1 << 2,
+  Equal      = 1 << 3,
+  Dollarpar  = 1 << 4,
+  Rightpar   = 1 << 5,
+  Comma      = 1 << 6,
+  Plusequal  = 1 << 7,
+};
 
 /**
- * Skip spaces and return the kind of the next token.
+ * Skip spaces and peek at the next token.
+ * If it is one of @a mask, skip it (if it is not Word) and return it.
+ * @note For composite tokens allowed by @a mask, input characters might
+ *       have been eaten even for an Unexpected result.
  */
-static token_e next_token(std::istream &in)
+static int expect_token(std::istream &in, int mask)
 {
 	while (true)
 	{
 		skip_spaces(in);
 		char c = in.peek();
-		if (!in.good()) return Eof;
+		if (!in.good()) return Unexpected;
+		int tok;
 		switch (c)
 		{
-		case ':': return Colon;
-		case ',': return Comma;
-		case '=': return Equal;
-		case '$': return Dollar;
-		case ')': return Rightpar;
 		case '\r':
-		case '\n':
-			return Eol;
+		case '\n': return Unexpected;
+		case ':': tok = Colon; break;
+		case ',': tok = Comma; break;
+		case '=': tok = Equal; break;
+		case ')': tok = Rightpar; break;
+		case '$':
+			if (!(mask & Dollarpar)) return Unexpected;
+			in.ignore(1);
+			tok = Dollarpar;
+			if (in.peek() != '(') return Unexpected;
+			break;
+		case '+':
+			if (!(mask & Plusequal)) return Unexpected;
+			in.ignore(1);
+			tok = Plusequal;
+			if (in.peek() != '=') return Unexpected;
+			break;
 		case '\\':
 			in.ignore(1);
-			c = in.peek();
-			if (c != '\r' && c != '\n')
-			{
-				in.putback('\\');
-				return Word;
-			}
-			skip_eol(in);
-			break;
+			if (skip_eol(in)) continue;
+			in.putback('\\');
+			return mask & Word ? Word : Unexpected;
 		default:
-			return Word;
+			return mask & Word ? Word : Unexpected;
 		}
+		if (!(tok & mask)) return Unexpected;
+		in.ignore(1);
+		return tok;
 	}
 }
 
@@ -876,7 +912,7 @@ static std::string read_word(std::istream &in)
 	int c = in.get();
 	std::string res;
 	if (!in.good()) return res;
-	char const *separators = " \t\r\n:$(),=\"";
+	char const *separators = " \t\r\n:$(),=+\"";
 	bool quoted = c == '"';
 	if (!quoted)
 	{
@@ -927,11 +963,9 @@ static void execute_function(std::istream &in, std::string const &name, string_l
 	}
 	skip_spaces(in);
 	string_list fix = read_words(in);
-	if (next_token(in) != Comma) goto error;
-	in.ignore(1);
+	if (!expect_token(in, Comma)) goto error;
 	string_list names = read_words(in);
-	if (next_token(in) != Rightpar) goto error;
-	in.ignore(1);
+	if (!expect_token(in, Rightpar)) goto error;
 	size_t fixl = fix.size();
 	if (name == "addprefix")
 	{
@@ -986,21 +1020,17 @@ static string_list read_words(std::istream &in)
 	string_list res;
 	while (true)
 	{
-		switch (next_token(in))
+		switch (expect_token(in, Word | Dollarpar))
 		{
 		case Word:
 			res.push_back(read_word(in));
 			break;
-		case Dollar:
+		case Dollarpar:
 		{
-			in.ignore(1);
-			if (in.get() != '(') goto error;
 			std::string name = read_word(in);
 			if (name.empty()) goto error;
-			token_e tok = next_token(in);
-			if (tok == Rightpar)
+			if (expect_token(in, Rightpar))
 			{
-				in.ignore(1);
 				variable_map::const_iterator i = variables.find(name);
 				if (i != variables.end())
 					res.insert(res.end(), i->second.begin(), i->second.end());
@@ -1038,7 +1068,7 @@ static void load_dependencies(std::istream &in)
 		{
 			dependencies[*i] = dep;
 		}
-		skip_eol(in);
+		skip_empty(in);
 	}
 }
 
@@ -1098,9 +1128,7 @@ static void load_rule(std::istream &in, std::string const &first)
 	rule.deps = read_words(in);
 	normalize_list(rule.deps);
 	skip_spaces(in);
-	char c = in.get();
-	if (c != '\r' && c != '\n') goto error;
-	skip_eol(in);
+	if (!skip_eol(in, true)) goto error;
 
 	// Read script.
 	std::ostringstream buf;
@@ -1219,7 +1247,7 @@ static void load_rules()
 		std::cerr << "Failed to load rules: no Remakefile found" << std::endl;
 		exit(EXIT_FAILURE);
 	}
-	skip_eol(in);
+	skip_empty(in);
 
 	// Read rules
 	while (in.good())
@@ -1228,27 +1256,23 @@ static void load_rules()
 		if (c == '#')
 		{
 			while (in.get() != '\n') {}
-			skip_eol(in);
+			skip_empty(in);
 			continue;
 		}
 		if (c == ' ' || c == '\t') goto error;
-		token_e tok = next_token(in);
-		if (tok == Word)
+		if (expect_token(in, Word))
 		{
 			std::string name = read_word(in);
 			if (name.empty()) goto error;
-			if (next_token(in) == Equal)
+			if (expect_token(in, Equal))
 			{
-				in.ignore(1);
 				DEBUG << "Assignment to variable " << name << std::endl;
 				variables[name] = read_words(in);
-				skip_eol(in);
+				if (!skip_eol(in, true)) goto error;
 			}
 			else load_rule(in, name);
 		}
-		else if (tok == Dollar)
-			load_rule(in, std::string());
-		else goto error;
+		else load_rule(in, std::string());
 	}
 
 	// Generate script for variable assignment
