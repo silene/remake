@@ -461,12 +461,25 @@ struct status_t
 typedef std::map<std::string, status_t> status_map;
 
 /**
+ * Delayed assignment to a variable.
+ */
+struct assign_t
+{
+	std::string name;
+	bool append;
+	string_list value;
+};
+
+typedef std::list<assign_t> assign_list;
+
+/**
  * A rule loaded from Remakefile.
  */
 struct rule_t
 {
 	string_list targets; ///< Files produced by this rule.
 	string_list deps;    ///< Files used for an implicit call to remake at the start of the script.
+	assign_list vars;    ///< Values of variables.
 	std::string script;  ///< Shell script for building the targets.
 };
 
@@ -508,11 +521,6 @@ typedef std::list<client_t> client_list;
  * Map from variable names to their content.
  */
 static variable_map variables;
-
-/**
- * Precomputed variable assignments for shell usage.
- */
-static std::string variable_block;
 
 /**
  * Map from targets to their known dependencies.
@@ -1118,6 +1126,7 @@ static void register_transparent_rule(rule_t const &rule)
 		}
 		assert(r->targets.size() == 1 && r->targets.front() == *i);
 		r->deps.insert(r->deps.end(), rule.deps.begin(), rule.deps.end());
+		r->vars.insert(r->vars.end(), rule.vars.begin(), rule.vars.end());
 	}
 
 	for (string_list::const_iterator i = rule.targets.begin(),
@@ -1201,9 +1210,36 @@ static void load_rule(std::istream &in, std::string const &first)
 	skip_spaces(in);
 	if (in.get() != ':') goto error;
 
+	bool assignment = false;
+
 	// Read dependencies.
-	rule.deps = read_words(in);
-	normalize_list(rule.deps);
+	if (expect_token(in, Word))
+	{
+		std::string d = read_word(in);
+		if (int tok = expect_token(in, Equal | Plusequal))
+		{
+			rule.vars.push_back(assign_t());
+			string_list v = read_words(in);
+			assign_t &a = rule.vars.back();
+			a.name = d;
+			a.append = tok == Plusequal;
+			a.value.swap(v);
+			assignment = true;
+		}
+		else
+		{
+			string_list v = read_words(in);
+			v.push_front(d);
+			normalize_list(v);
+			rule.deps.swap(v);
+		}
+	}
+	else
+	{
+		string_list v = read_words(in);
+		normalize_list(v);
+		rule.deps.swap(v);
+	}
 	skip_spaces(in);
 	if (!skip_eol(in, true)) goto error;
 
@@ -1231,12 +1267,16 @@ static void load_rule(std::istream &in, std::string const &first)
 	// Add generic rules to the correct set.
 	if (generic)
 	{
+		if (assignment) goto error;
 		generic_rules.push_back(rule);
 		return;
 	}
 
 	if (!rule.script.empty())
+	{
+		if (assignment) goto error;
 		register_scripted_rule(rule);
+	}
 	else
 		register_transparent_rule(rule);
 
@@ -1321,24 +1361,6 @@ static void load_rules()
 		}
 		else load_rule(in, std::string());
 	}
-
-	// Generate script for variable assignment
-	std::ostringstream buf;
-	for (variable_map::const_iterator i = variables.begin(),
-	     i_end = variables.end(); i != i_end; ++i)
-	{
-		std::ostringstream var;
-		bool first = true;
-		for (string_list::const_iterator j = i->second.begin(),
-		     j_end = i->second.end(); j != j_end; ++j)
-		{
-			if (first) first = false;
-			else var << ' ';
-			var << *j;
-		}
-		buf << i->first << '=' << escape_string(var.str()) << std::endl;
-	}
-	variable_block = buf.str();
 }
 
 /**
@@ -1412,9 +1434,11 @@ static rule_t find_rule(std::string const &target)
 	// Optimize the lookup when there is only one target (already looked up).
 	if (grule.targets.size() == 1)
 	{
-		if (i != i_end)
-			grule.deps.insert(grule.deps.end(),
-				i->second->deps.begin(), i->second->deps.end());
+		if (i == i_end) return grule;
+		grule.deps.insert(grule.deps.end(),
+			i->second->deps.begin(), i->second->deps.end());
+		grule.vars.insert(grule.vars.end(),
+			i->second->vars.begin(), i->second->vars.end());
 		return grule;
 	}
 	// Add the dependencies of the specific rules of every target to the
@@ -1427,6 +1451,8 @@ static rule_t find_rule(std::string const &target)
 		if (!i->second->script.empty()) return rule_t();
 		grule.deps.insert(grule.deps.end(),
 			i->second->deps.begin(), i->second->deps.end());
+		grule.vars.insert(grule.vars.end(),
+			i->second->vars.begin(), i->second->vars.end());
 	}
 	return grule;
 }
@@ -1624,6 +1650,37 @@ static bool run_script(int job_id, rule_t const &rule)
 		dependencies[*i] = dep;
 	}
 
+	// Update the content of variables.
+	variable_map vars = variables;
+	for (assign_list::const_iterator i = rule.vars.begin(),
+	     i_end = rule.vars.end(); i != i_end; ++i)
+	{
+		std::pair<variable_map::iterator, bool> j =
+			vars.insert(std::make_pair(i->name, string_list()));
+		string_list &val = j.first->second;
+		if (!i->append) val.clear();
+		val.insert(val.end(), i->value.begin(), i->value.end());
+	}
+
+	// Output them at the start of the script.
+	std::ostringstream script_buf;
+	for (variable_map::const_iterator i = vars.begin(),
+	     i_end = vars.end(); i != i_end; ++i)
+	{
+		std::ostringstream var;
+		bool first = true;
+		for (string_list::const_iterator j = i->second.begin(),
+		     j_end = i->second.end(); j != j_end; ++j)
+		{
+			if (first) first = false;
+			else var << ' ';
+			var << *j;
+		}
+		script_buf << i->first << '=' << escape_string(var.str()) << std::endl;
+	}
+	script_buf << rule.script;
+	std::string const &script = script_buf.str();
+
 	DEBUG_open << "Starting script for job " << job_id << "... ";
 #ifdef WINDOWS
 	HANDLE pfd[2];
@@ -1668,7 +1725,6 @@ static bool run_script(int job_id, rule_t const &rule)
 		goto error2;
 	}
 	CloseHandle(pi.hThread);
-	std::string script = variable_block + rule.script;
 	DWORD len = script.length(), wlen;
 	if (!WriteFile(pfd[1], script.c_str(), len, &wlen, NULL) || wlen < len)
 		std::cerr << "Unexpected failure while sending script to shell" << std::endl;
@@ -1694,7 +1750,6 @@ static bool run_script(int job_id, rule_t const &rule)
 	if (pid_t pid = fork())
 	{
 		if (pid == -1) goto error2;
-		std::string script = variable_block + rule.script;
 		ssize_t len = script.length();
 		if (write(pfd[1], script.c_str(), len) < len)
 			std::cerr << "Unexpected failure while sending script to shell" << std::endl;
