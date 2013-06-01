@@ -1264,10 +1264,13 @@ static void load_rules()
 		{
 			std::string name = read_word(in);
 			if (name.empty()) goto error;
-			if (expect_token(in, Equal))
+			if (int tok = expect_token(in, Equal | Plusequal))
 			{
 				DEBUG << "Assignment to variable " << name << std::endl;
-				variables[name] = read_words(in);
+				string_list value = read_words(in);
+				string_list &dest = variables[name];
+				if (tok == Equal) dest.swap(value);
+				else dest.splice(dest.end(), value);
 				if (!skip_eol(in, true)) goto error;
 			}
 			else load_rule(in, name);
