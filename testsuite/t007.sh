@@ -6,11 +6,11 @@ cat > Remakefile <<EOF
 VAR = bad
 
 t%st: af
-	test \$VAR = ok
+	test \$(VAR) = ok
 	cat af bf cf > /dev/null
 
 %f:
-	touch \$1
+	touch \$\$1
 
 test: bf
 

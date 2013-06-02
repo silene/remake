@@ -1645,6 +1645,75 @@ static void complete_job(int job_id, bool success)
 }
 
 /**
+ * Return the script obtained by substituting variables.
+ */
+static std::string prepare_script(rule_t const &rule)
+{
+	std::string const &s = rule.script;
+	std::istringstream in(s);
+	std::ostringstream out;
+	size_t len = s.size();
+
+	while (!in.eof())
+	{
+		size_t pos = in.tellg(), p = s.find('$', pos);
+		if (p == std::string::npos || p == len - 1) p = len;
+		out.write(&s[pos], p - pos);
+		if (p == len) break;
+		++p;
+		in.seekg(p + 1);
+		if (s[p] == '$') out << '$';
+		else if (s[p] == '(')
+		{
+			std::string name = read_word(in);
+			if (name.empty())
+			{
+				std::cerr << "Failure to execute script: syntax error" << std::endl;
+				exit(EXIT_FAILURE);
+			}
+			bool first = true;
+			string_list res;
+			if (expect_token(in, Rightpar))
+			{
+				string_list const *header = NULL;
+				variable_map::const_iterator j = variables.find(name);
+				if (j != variables.end()) header = &j->second;
+				for (assign_list::const_iterator i = rule.vars.begin(),
+				     i_end = rule.vars.end(); i != i_end; ++i)
+				{
+					if (!i->append)
+					{
+						header = NULL;
+						res.clear();
+					}
+					res.insert(res.end(), i->value.begin(), i->value.end());
+				}
+				if (header)
+				{
+					for (string_list::const_iterator i = header->begin(),
+					     i_end = header->end(); i != i_end; ++i)
+					{
+						if (first) first = false;
+						else out << ' ';
+						out << *i;
+					}
+				}
+			}
+			else execute_function(in, name, res);
+			for (string_list::const_iterator i = res.begin(),
+			     i_end = res.end(); i != i_end; ++i)
+			{
+				if (first) first = false;
+				else out << ' ';
+				out << *i;
+			}
+		}
+	}
+
+	return out.str();
+}
+
+/**
  * Execute the script from @a rule.
  */
 static bool run_script(int job_id, rule_t const &rule)
@@ -1669,34 +1738,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		dependencies[*i] = dep;
 	}
 
-	// Update the content of variables.
-	variable_map vars = variables;
-	for (assign_list::const_iterator i = rule.vars.begin(),
-	     i_end = rule.vars.end(); i != i_end; ++i)
-	{
-		string_list &val = vars[i->name];
-		if (!i->append) val.clear();
-		val.insert(val.end(), i->value.begin(), i->value.end());
-	}
-
-	// Output them at the start of the script.
-	std::ostringstream script_buf;
-	for (variable_map::const_iterator i = vars.begin(),
-	     i_end = vars.end(); i != i_end; ++i)
-	{
-		std::ostringstream var;
-		bool first = true;
-		for (string_list::const_iterator j = i->second.begin(),
-		     j_end = i->second.end(); j != j_end; ++j)
-		{
-			if (first) first = false;
-			else var << ' ';
-			var << *j;
-		}
-		script_buf << i->first << '=' << escape_string(var.str()) << std::endl;
-	}
-	script_buf << rule.script;
-	std::string const &script = script_buf.str();
+	std::string script = prepare_script(rule);
 
 	DEBUG_open << "Starting script for job " << job_id << "... ";
 #ifdef WINDOWS

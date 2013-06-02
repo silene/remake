@@ -8,7 +8,7 @@ VAR += d e
 VAR = \$(addprefix z, \$(VAR))
 
 test:
-	echo \$VAR > a
+	echo \$(VAR) > a
 	echo "zb zc zd ze" > b
 EOF
 

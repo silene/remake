@@ -10,7 +10,7 @@ b: d
 	cat d >> b
 c d:
 	echo c > c
-	echo d\$TICK > d
+	echo d\$\$TICK > d
 EOF
 
 export TICK=1

@@ -4,7 +4,7 @@
 
 cat > Remakefile <<EOF
 %:
-	echo \$1\$TICK > \$1
+	echo \$\$1\$\$TICK > \$\$1
 a b: c
 EOF
 
