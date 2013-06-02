@@ -975,100 +975,286 @@ static std::string read_word(std::istream &in)
 	}
 }
 
-static string_list read_words(std::istream &in);
+enum input_status
+{
+	Success,
+	SyntaxError,
+	Eof
+};
 
 /**
- * Execute a built-in function @a name and append its result to @a dest.
+ * Interface for word producers.
  */
-static void execute_function(std::istream &in, std::string const &name, string_list &dest)
+struct generator
 {
-	if (false)
+	virtual ~generator() {}
+	virtual input_status next(std::string &) = 0;
+};
+
+/**
+ * Variable modifiers.
+ */
+static assign_list const *local_variables = NULL;
+
+/**
+ * Generator for the words of a variable.
+ */
+struct variable_generator: generator
+{
+	std::string name;
+	string_list::const_iterator cur1, end1;
+	assign_list::const_iterator cur2, end2;
+	variable_generator(std::string const &);
+	input_status next(std::string &);
+};
+
+variable_generator::variable_generator(std::string const &n): name(n)
+{
+	bool append = true;
+	if (local_variables)
 	{
-		error:
-		std::cerr << "Failed to load rules: syntax error" << std::endl;
-		exit(EXIT_FAILURE);
-	}
-	skip_spaces(in);
-	string_list fix = read_words(in);
-	if (!expect_token(in, Comma)) goto error;
-	string_list names = read_words(in);
-	if (!expect_token(in, Rightpar)) goto error;
-	size_t fixl = fix.size();
-	if (name == "addprefix")
-	{
-		for (string_list::const_iterator i = names.begin(),
-		     i_end = names.end(); i != i_end; ++i)
+		// Set cur2 to the last variable overwriter, if any.
+		cur2 = local_variables->begin();
+		end2 = local_variables->end();
+		for (assign_list::const_iterator i = cur2; i != end2; ++i)
 		{
-			if (!fixl)
+			if (i->name == name && !i->append)
 			{
-				dest.push_back(*i);
-				continue;
-			}
-			string_list::const_iterator k = fix.begin();
-			for (size_t j = 1; j != fixl; ++j)
-			{
-				dest.push_back(*k++);
-			}
-			dest.push_back(*k++ + *i);
-		}
-	}
-	else if (name == "addsuffix")
-	{
-		for (string_list::const_iterator i = names.begin(),
-		     i_end = names.end(); i != i_end; ++i)
-		{
-			if (!fixl)
-			{
-				dest.push_back(*i);
-				continue;
-			}
-			string_list::const_iterator k = fix.begin();
-			dest.push_back(*i + *k++);
-			for (size_t j = 1; j != fixl; ++j)
-			{
-				dest.push_back(*k++);
+				append = false;
+				cur2 = i;
 			}
 		}
 	}
-	else goto error;
+	else
+	{
+		static assign_list dummy;
+		cur2 = dummy.begin();
+		end2 = dummy.end();
+	}
+	static string_list dummy;
+	cur1 = dummy.begin();
+	end1 = dummy.end();
+	if (append)
+	{
+		variable_map::const_iterator i = variables.find(name);
+		if (i == variables.end()) return;
+		cur1 = i->second.begin();
+		end1 = i->second.end();
+	}
+}
+
+input_status variable_generator::next(std::string &res)
+{
+	restart:
+	if (cur1 != end1)
+	{
+		res = *cur1;
+		++cur1;
+		return Success;
+	}
+	while (cur2 != end2)
+	{
+		if (cur2->name == name)
+		{
+			cur1 = cur2->value.begin();
+			end1 = cur2->value.end();
+			++cur2;
+			goto restart;
+		}
+		++cur2;
+	}
+	return Eof;
+}
+
+static generator *get_function(std::istream &, std::string const &);
+
+/**
+ * Generator for the words of an input stream.
+ */
+struct input_generator
+{
+	std::istream &in;
+	generator *nested;
+	bool earliest_exit, done;
+	input_generator(std::istream &i, bool e = false)
+		: in(i), nested(NULL), earliest_exit(e), done(false) {}
+	input_status next(std::string &);
+	~input_generator() { assert(!nested); }
+};
+
+input_status input_generator::next(std::string &res)
+{
+	if (nested)
+	{
+		restart:
+		input_status s = nested->next(res);
+		if (s == Success) return Success;
+		delete nested;
+		nested = NULL;
+		if (s == SyntaxError) return SyntaxError;
+	}
+	if (done) return Eof;
+	if (earliest_exit) done = true;
+	switch (expect_token(in, Word | Dollarpar))
+	{
+	case Word:
+		res = read_word(in);
+		return Success;
+	case Dollarpar:
+	{
+		std::string name = read_word(in);
+		if (name.empty()) return SyntaxError;
+		if (expect_token(in, Rightpar))
+			nested = new variable_generator(name);
+		else
+		{
+			nested = get_function(in, name);
+			if (!nested) return SyntaxError;
+		}
+		goto restart;
+	}
+	default:
+		return Eof;
+	}
 }
 
 /**
- * Read a list of words, possibly executing functions.
+ * Read a list of words from an input generator.
+ * @return false if a syntax error was encountered.
  */
-static string_list read_words(std::istream &in)
+static bool read_words(input_generator &in, string_list &res)
 {
-	if (false)
-	{
-		error:
-		std::cerr << "Failed to load rules: syntax error" << std::endl;
-		exit(EXIT_FAILURE);
-	}
-	string_list res;
 	while (true)
 	{
-		switch (expect_token(in, Word | Dollarpar))
-		{
-		case Word:
-			res.push_back(read_word(in));
-			break;
-		case Dollarpar:
-		{
-			std::string name = read_word(in);
-			if (name.empty()) goto error;
-			if (expect_token(in, Rightpar))
-			{
-				variable_map::const_iterator i = variables.find(name);
-				if (i != variables.end())
-					res.insert(res.end(), i->second.begin(), i->second.end());
-			}
-			else execute_function(in, name, res);
-			break;
-		}
-		default:
-			return res;
-		}
+		res.push_back(std::string());
+		input_status s = in.next(res.back());
+		if (s == Success) continue;
+		res.pop_back();
+		return s == Eof;
 	}
+}
+
+static bool read_words(std::istream &in, string_list &res)
+{
+	input_generator gen(in);
+	return read_words(gen, res);
+}
+
+/**
+ * Generator for the result of function addprefix.
+ */
+struct addprefix_generator: generator
+{
+	input_generator gen;
+	string_list pre;
+	string_list::const_iterator prei;
+	size_t prej, prel;
+	std::string suf;
+	addprefix_generator(std::istream &, bool &);
+	input_status next(std::string &);
+};
+
+addprefix_generator::addprefix_generator(std::istream &in, bool &ok): gen(in)
+{
+	if (!read_words(gen, pre)) return;
+	if (!expect_token(gen.in, Comma)) return;
+	prej = 0;
+	prel = pre.size();
+	ok = true;
+}
+
+input_status addprefix_generator::next(std::string &res)
+{
+	if (prej)
+	{
+		produce:
+		if (prej == prel)
+		{
+			res = *prei + suf;
+			prej = 0;
+		}
+		else
+		{
+			res = *prei++;
+			++prej;
+		}
+		return Success;
+	}
+	switch (gen.next(res))
+	{
+	case Success:
+		if (!prel) return Success;
+		prei = pre.begin();
+		prej = 1;
+		suf = res;
+		goto produce;
+	case Eof:
+		return expect_token(gen.in, Rightpar) ? Eof : SyntaxError;
+	default:
+		return SyntaxError;
+	}
+}
+
+/**
+ * Generator for the result of function addsuffix.
+ */
+struct addsuffix_generator: generator
+{
+	input_generator gen;
+	string_list suf;
+	string_list::const_iterator sufi;
+	size_t sufj, sufl;
+	std::string pre;
+	addsuffix_generator(std::istream &, bool &);
+	input_status next(std::string &);
+};
+
+addsuffix_generator::addsuffix_generator(std::istream &in, bool &ok): gen(in)
+{
+	if (!read_words(gen, suf)) return;
+	if (!expect_token(gen.in, Comma)) return;
+	sufj = 0;
+	sufl = suf.size();
+	ok = true;
+}
+
+input_status addsuffix_generator::next(std::string &res)
+{
+	if (sufj)
+	{
+		if (sufj != sufl)
+		{
+			res = *sufi++;
+			++sufj;
+			return Success;
+		}
+		sufj = 0;
+	}
+	switch (gen.next(res))
+	{
+	case Success:
+		if (!sufl) return Success;
+		sufi = suf.begin();
+		sufj = 1;
+		res += *sufi++;
+		return Success;
+	case Eof:
+		return expect_token(gen.in, Rightpar) ? Eof : SyntaxError;
+	default:
+		return SyntaxError;
+	}
+}
+
+generator *get_function(std::istream &in, std::string const &name)
+{
+	skip_spaces(in);
+	generator *g = NULL;
+	bool ok = false;
+	if (name == "addprefix") g = new addprefix_generator(in, ok);
+	else if (name == "addsuffix") g = new addsuffix_generator(in, ok);
+	if (!g || ok) return g;
+	delete g;
+	return NULL;
 }
 
 /**
@@ -1076,20 +1262,26 @@ static string_list read_words(std::istream &in)
  */
 static void load_dependencies(std::istream &in)
 {
+	if (false)
+	{
+		error:
+		std::cerr << "Failed to load database" << std::endl;
+		exit(EXIT_FAILURE);
+	}
+
 	while (!in.eof())
 	{
-		string_list targets = read_words(in);
-		if (targets.empty()) return;
+		string_list targets;
+		if (!read_words(in, targets)) goto error;
+		if (in.eof()) return;
+		if (targets.empty()) goto error;
 		DEBUG << "reading dependencies of target " << targets.front() << std::endl;
-		if (in.get() != ':')
-		{
-			std::cerr << "Failed to load database" << std::endl;
-			exit(EXIT_FAILURE);
-		}
+		if (in.get() != ':') goto error;
 		ref_ptr<dependency_t> dep;
 		dep->targets = targets;
-		string_list d = read_words(in);
-		dep->deps.insert(d.begin(), d.end());
+		string_list deps;
+		if (!read_words(in, deps)) goto error;
+		dep->deps.insert(deps.begin(), deps.end());
 		for (string_list::const_iterator i = targets.begin(),
 		     i_end = targets.end(); i != i_end; ++i)
 		{
@@ -1209,7 +1401,8 @@ static void load_rule(std::istream &in, std::string const &first)
 	rule_t rule;
 
 	// Read targets and check genericity.
-	string_list targets = read_words(in);
+	string_list targets;
+	if (!read_words(in, targets)) goto error;
 	if (!first.empty()) targets.push_front(first);
 	else if (targets.empty()) goto error;
 	else DEBUG << "actual target: " << targets.front() << std::endl;
@@ -1238,7 +1431,8 @@ static void load_rule(std::istream &in, std::string const &first)
 		if (int tok = expect_token(in, Equal | Plusequal))
 		{
 			rule.vars.push_back(assign_t());
-			string_list v = read_words(in);
+			string_list v;
+			if (!read_words(in, v)) goto error;
 			assign_t &a = rule.vars.back();
 			a.name = d;
 			a.append = tok == Plusequal;
@@ -1247,7 +1441,8 @@ static void load_rule(std::istream &in, std::string const &first)
 		}
 		else
 		{
-			string_list v = read_words(in);
+			string_list v;
+			if (!read_words(in, v)) goto error;
 			v.push_front(d);
 			normalize_list(v);
 			rule.deps.swap(v);
@@ -1255,7 +1450,8 @@ static void load_rule(std::istream &in, std::string const &first)
 	}
 	else
 	{
-		string_list v = read_words(in);
+		string_list v;
+		if (!read_words(in, v)) goto error;
 		normalize_list(v);
 		rule.deps.swap(v);
 	}
@@ -1370,7 +1566,8 @@ static void load_rules()
 			if (int tok = expect_token(in, Equal | Plusequal))
 			{
 				DEBUG << "Assignment to variable " << name << std::endl;
-				string_list value = read_words(in);
+				string_list value;
+				if (!read_words(in, value)) goto error;
 				string_list &dest = variables[name];
 				if (tok == Equal) dest.swap(value);
 				else dest.splice(dest.end(), value);
@@ -1653,6 +1850,7 @@ static std::string prepare_script(rule_t const &rule)
 	std::istringstream in(s);
 	std::ostringstream out;
 	size_t len = s.size();
+	local_variables = &rule.vars;
 
 	while (!in.eof())
 	{
@@ -1661,52 +1859,35 @@ static std::string prepare_script(rule_t const &rule)
 		out.write(&s[pos], p - pos);
 		if (p == len) break;
 		++p;
-		in.seekg(p + 1);
-		if (s[p] == '$') out << '$';
+		if (s[p] == '$')
+		{
+			out << '$';
+			in.seekg(p + 1);
+		}
 		else if (s[p] == '(')
 		{
-			std::string name = read_word(in);
-			if (name.empty())
-			{
-				std::cerr << "Failure to execute script: syntax error" << std::endl;
-				exit(EXIT_FAILURE);
-			}
+			in.seekg(p - 1);
 			bool first = true;
-			string_list res;
-			if (expect_token(in, Rightpar))
+			input_generator gen(in, true);
+			while (true)
 			{
-				string_list const *header = NULL;
-				variable_map::const_iterator j = variables.find(name);
-				if (j != variables.end()) header = &j->second;
-				for (assign_list::const_iterator i = rule.vars.begin(),
-				     i_end = rule.vars.end(); i != i_end; ++i)
+				std::string w;
+				input_status s = gen.next(w);
+				if (s == SyntaxError)
 				{
-					if (!i->append)
-					{
-						header = NULL;
-						res.clear();
-					}
-					res.insert(res.end(), i->value.begin(), i->value.end());
+					// TODO
+					return "false";
 				}
-				if (header)
-				{
-					for (string_list::const_iterator i = header->begin(),
-					     i_end = header->end(); i != i_end; ++i)
-					{
-						if (first) first = false;
-						else out << ' ';
-						out << *i;
-					}
-				}
-			}
-			else execute_function(in, name, res);
-			for (string_list::const_iterator i = res.begin(),
-			     i_end = res.end(); i != i_end; ++i)
-			{
+				if (s == Eof) break;
 				if (first) first = false;
 				else out << ' ';
-				out << *i;
+				out << w;
 			}
+		}
+		else
+		{
+			// TODO
+			in.seekg(p + 1);
 		}
 	}
 
