@@ -283,7 +283,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.6
+@version 0.7
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify
@@ -695,35 +695,50 @@ struct log_auto_close
 #define DEBUG_close if ((auto_close.still_open = false), debug.active) debug(false)
 
 /**
- * Return the original string if it does not contain any special characters,
- * a quoted and escaped string otherwise.
+ * Strong typedef for strings that need escaping.
+ * @note The string is stored as a reference, so the constructed object is
+ *       meant to be immediately consumed.
  */
-static std::string escape_string(std::string const &s)
+struct escape_string
 {
+	std::string const &input;
+	escape_string(std::string const &s): input(s) {}
+};
+
+/**
+ * Write the string in @a se to @a out if it does not contain any special
+ * characters, a quoted and escaped string otherwise.
+ */
+static std::ostream &operator<<(std::ostream &out, escape_string const &se)
+{
+	std::string const &s = se.input;
 	char const *quoted_char = ",: '";
 	char const *escaped_char = "\"\\$!";
 	bool need_quotes = false;
-	size_t len = s.length(), nb = len;
+	char *buf = NULL;
+	size_t len = s.length(), last = 0, j = 0;
 	for (size_t i = 0; i < len; ++i)
 	{
 		if (strchr(escaped_char, s[i]))
 		{
 			need_quotes = true;
-			++nb;
+			if (!buf) buf = new char[len * 2];
+			memcpy(&buf[j], &s[last], i - last);
+			j += i - last;
+			buf[j++] = '\\';
+			buf[j++] = s[i];
+			last = i + 1;
 		}
 		if (!need_quotes && strchr(quoted_char, s[i]))
 			need_quotes = true;
 	}
-	if (!need_quotes) return s;
-	std::string t(nb + 2, '\\');
-	t[0] = '"';
-	for (size_t i = 0, j = 1; i < len; ++i, ++j)
-	{
-		if (strchr(escaped_char, s[i])) ++j;
-		t[j] = s[i];
-	}
-	t[nb + 1] = '"';
-	return t;
+	if (!need_quotes) return out << s;
+	out << '"';
+	if (!buf) return out << s << '"';
+	out.write(buf, j);
+	out.write(&s[last], len - last);
+	delete[] buf;
+	return out << '"';
 }
 
 /**
