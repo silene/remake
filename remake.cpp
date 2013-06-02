@@ -1314,11 +1314,11 @@ static void load_dependencies()
  * - Create a new rule with a single target for each target, if needed.
  * - Add the prerequisites of @a rule to all these associated rules.
  */
-static void register_transparent_rule(rule_t const &rule)
+static void register_transparent_rule(rule_t const &rule, string_list const &targets)
 {
 	assert(rule.script.empty());
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i)
+	for (string_list::const_iterator i = targets.begin(),
+	     i_end = targets.end(); i != i_end; ++i)
 	{
 		std::pair<rule_map::iterator, bool> j =
 			specific_rules.insert(std::make_pair(*i, ref_ptr<rule_t>()));
@@ -1340,8 +1340,8 @@ static void register_transparent_rule(rule_t const &rule)
 		r->vars.insert(r->vars.end(), rule.vars.begin(), rule.vars.end());
 	}
 
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i)
+	for (string_list::const_iterator i = targets.begin(),
+	     i_end = targets.end(); i != i_end; ++i)
 	{
 		ref_ptr<dependency_t> &dep = dependencies[*i];
 		if (dep->targets.empty()) dep->targets.push_back(*i);
@@ -1493,7 +1493,13 @@ static void load_rule(std::istream &in, std::string const &first)
 		register_scripted_rule(rule);
 	}
 	else
-		register_transparent_rule(rule);
+	{
+		// Swap away the targets to avoid costly copies when registering.
+		string_list targets;
+		std::swap(rule.targets, targets);
+		register_transparent_rule(rule, targets);
+		std::swap(rule.targets, targets);
+	}
 
 	// If there is no default target yet, mark it as such.
 	if (first_target.empty())
