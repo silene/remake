@@ -706,10 +706,14 @@ static std::string escape_string(std::string const &s)
 	size_t len = s.length(), nb = len;
 	for (size_t i = 0; i < len; ++i)
 	{
-		if (strchr(quoted_char, s[i])) need_quotes = true;
-		if (strchr(escaped_char, s[i])) ++nb;
+		if (strchr(escaped_char, s[i]))
+		{
+			need_quotes = true;
+			++nb;
+		}
+		if (!need_quotes && strchr(quoted_char, s[i]))
+			need_quotes = true;
 	}
-	if (nb != len) need_quotes = true;
 	if (!need_quotes) return s;
 	std::string t(nb + 2, '\\');
 	t[0] = '"';
