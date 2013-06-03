@@ -1876,6 +1876,19 @@ static std::string prepare_script(rule_t const &rule)
 				out << rule.deps.front();
 			in.seekg(p + 1);
 			break;
+		case '^':
+		{
+			bool first = true;
+			for (string_list::const_iterator i = rule.deps.begin(),
+			     i_end = rule.deps.end(); i != i_end; ++i)
+			{
+				if (first) first = false;
+				else out << ' ';
+				out << *i;
+			}
+			in.seekg(p + 1);
+			break;
+		}
 		case '@':
 			assert(!rule.targets.empty());
 			out << rule.targets.front();
