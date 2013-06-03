@@ -2247,7 +2247,7 @@ static void create_server()
 
 	// Create and listen to the socket.
 	socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (socket_fd < 0) goto error;
+	if (socket_fd == INVALID_SOCKET) goto error;
 	if (!SetHandleInformation((HANDLE)socket_fd, HANDLE_FLAG_INHERIT, 0))
 		goto error;
 	if (bind(socket_fd, (struct sockaddr *)&socket_addr, sizeof(sockaddr_in)))
@@ -2289,10 +2289,10 @@ static void create_server()
 	// Create and listen to the socket.
 #ifdef LINUX
 	socket_fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
-	if (socket_fd < 0) goto error;
+	if (socket_fd == INVALID_SOCKET) goto error;
 #else
 	socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (socket_fd < 0) goto error;
+	if (socket_fd == INVALID_SOCKET) goto error;
 	if (fcntl(socket_fd, F_SETFD, FD_CLOEXEC) < 0) goto error;
 #endif
 	if (bind(socket_fd, (struct sockaddr *)&socket_addr, len))
@@ -2425,14 +2425,14 @@ void server_loop()
 		DWORD w = WaitForMultipleObjects(len, h, false, INFINITE);
 		WSAEventSelect(socket_fd, aev, 0);
 		WSACloseEvent(aev);
-		if (w < WAIT_OBJECT_0 || WAIT_OBJECT_0 + len <= w)
+		if (len <= w)
 			continue;
-		if (w == WAIT_OBJECT_0 + len - 1)
+		if (w == len - 1)
 		{
 			accept_client();
 			continue;
 		}
-		pid_t pid = h[w - WAIT_OBJECT_0];
+		pid_t pid = h[w];
 		DWORD s = 0;
 		bool res = GetExitCodeProcess(pid, &s) && s == 0;
 		CloseHandle(pid);
@@ -2517,7 +2517,7 @@ void client_mode(char *socket_name, string_list const &targets)
 #ifdef WINDOWS
 	struct sockaddr_in socket_addr;
 	socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-	if (socket_fd < 0) goto error;
+	if (socket_fd == INVALID_SOCKET) goto error;
 	socket_addr.sin_family = AF_INET;
 	socket_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 	socket_addr.sin_port = atoi(socket_name);
@@ -2528,7 +2528,7 @@ void client_mode(char *socket_name, string_list const &targets)
 	size_t len = strlen(socket_name);
 	if (len >= sizeof(socket_addr.sun_path) - 1) exit(EXIT_FAILURE);
 	socket_fd = socket(AF_UNIX, SOCK_STREAM, 0);
-	if (socket_fd < 0) goto error;
+	if (socket_fd == INVALID_SOCKET) goto error;
 	socket_addr.sun_family = AF_UNIX;
 	strcpy(socket_addr.sun_path, socket_name);
 	if (connect(socket_fd, (struct sockaddr *)&socket_addr, sizeof(socket_addr.sun_family) + len))
