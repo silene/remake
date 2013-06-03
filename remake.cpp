@@ -1941,7 +1941,19 @@ static bool run_script(int job_id, rule_t const &rule)
 
 	std::string script = prepare_script(rule);
 
+	std::ostringstream job_id_buf;
+	job_id_buf << job_id;
+	std::string job_id_ = job_id_buf.str();
+
 	DEBUG_open << "Starting script for job " << job_id << "... ";
+	if (false)
+	{
+		error:
+		DEBUG_close << "failed\n";
+		complete_job(job_id, false);
+		return false;
+	}
+
 #ifdef WINDOWS
 	HANDLE pfd[2];
 	if (false)
@@ -1949,10 +1961,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		error2:
 		CloseHandle(pfd[0]);
 		CloseHandle(pfd[1]);
-		error:
-		DEBUG_close << "failed\n";
-		complete_job(job_id, false);
-		return false;
+		goto error;
 	}
 	if (!CreatePipe(&pfd[0], &pfd[1], NULL, 0))
 		goto error;
@@ -1967,19 +1976,10 @@ static bool run_script(int job_id, rule_t const &rule)
 	si.dwFlags |= STARTF_USESTDHANDLES;
 	PROCESS_INFORMATION pi;
 	ZeroMemory(&pi, sizeof(PROCESS_INFORMATION));
-	std::ostringstream buf;
-	buf << job_id;
-	if (!SetEnvironmentVariable("REMAKE_JOB_ID", buf.str().c_str()))
+	if (!SetEnvironmentVariable("REMAKE_JOB_ID", job_id_.c_str()))
 		goto error2;
-	std::ostringstream argv;
-	argv << "SH.EXE -e -s";
-	if (echo_scripts) argv << " -v";
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i)
-	{
-		argv << " \"" << escape_string(*i) << '"';
-	}
-	if (!CreateProcess(NULL, (char *)argv.str().c_str(), NULL, NULL,
+	char const *argv = echo_scripts ? "SH.EXE -e -s -v" : "SH.EXE -e -s";
+	if (!CreateProcess(NULL, (char *)argv, NULL, NULL,
 	    true, 0, NULL, NULL, &si, &pi))
 	{
 		goto error2;
@@ -2000,10 +2000,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		error2:
 		close(pfd[0]);
 		close(pfd[1]);
-		error:
-		DEBUG_close << "failed\n";
-		complete_job(job_id, false);
-		return false;
+		goto error;
 	}
 	if (pipe(pfd) == -1)
 		goto error;
@@ -2020,22 +2017,10 @@ static bool run_script(int job_id, rule_t const &rule)
 		return true;
 	}
 	// Child process starts here.
-	std::ostringstream buf;
-	buf << job_id;
-	if (setenv("REMAKE_JOB_ID", buf.str().c_str(), 1))
+	if (setenv("REMAKE_JOB_ID", job_id_.c_str(), 1))
 		_exit(EXIT_FAILURE);
-	int num = echo_scripts ? 4 : 3;
-	char const **argv = new char const *[num + rule.targets.size() + 1];
-	argv[0] = "sh";
-	argv[1] = "-e";
-	argv[2] = "-s";
+	char const *argv[5] = { "sh", "-e", "-s", NULL, NULL };
 	if (echo_scripts) argv[3] = "-v";
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i, ++num)
-	{
-		argv[num] = i->c_str();
-	}
-	argv[num] = NULL;
 	if (pfd[0] != 0)
 	{
 		dup2(pfd[0], 0);
