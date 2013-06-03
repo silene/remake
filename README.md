@@ -43,13 +43,13 @@ The above usage of dynamic dependencies is hardly useful. Their strength
 lies in the fact that they can be computed on the fly:
 
 	%.o : %.c
-		gcc -MMD -MF $1.d -o $1 -c ${1%.o}.c
-		remake -r < $1.d
-		rm $1.d
+		gcc -MMD -MF $@.d -o $@ -c $<
+		remake -r < $@.d
+		rm $@.d
 
 	%.cmo : %.ml
-		ocamldep ${1%.cmo}.ml | remake -r $1
-		ocamlc -c ${1%.cmo}.ml
+		ocamldep $< | remake -r $@
+		ocamlc -c $<
 
 	after.xml: before.xml rules.xsl
 		xsltproc --load-trace -o after.xml rules.xsl before.xml 2> deps
@@ -70,8 +70,9 @@ Usage: <tt>remake <i>options</i> <i>targets</i></tt>
 Options:
 
 - <tt>-d</tt>: Echo script commands.
-- <tt>-j\[N\]</tt>, <tt>--jobs=\[N\]</tt>: Allow N jobs at once; infinite jobs
-  with no argument.
+- <tt>-f FILE</tt>: Read <tt>FILE</tt> as <b>Remakefile</b>.
+- <tt>-j\[N\]</tt>, <tt>--jobs=\[N\]</tt>: Allow <tt>N</tt> jobs at once;
+  infinite jobs with no argument.
 - <tt>-k</tt>, <tt>--keep-going</tt>: Keep going when some targets cannot be made.
 - <tt>-r</tt>: Look up targets from the dependencies on standard input.
 - <tt>-s</tt>, <tt>--silent</tt>, <tt>--quiet</tt>: Do not echo targets.
@@ -108,12 +109,33 @@ quoted names.
 Variables can be used to factor lists of targets or dependencies. They are
 expanded as they are encountered during <b>Remakefile</b> parsing.
 
+	VAR2 = a
 	VAR1 = c d
-	VAR2 = a $(VAR1) b
+	VAR2 += $(VAR1) b
 	$(VAR2) e :
 
-Variables can be used inside rule scripts; they are available as non-exported
-shell variables there.
+Variable assignments can appear instead of prerequisites inside non-generic
+rules with no script. They are then expanded inside the corresponding
+generic rule.
+
+	foo.o: CFLAGS += -DBAR
+
+	%.o : %.c
+		gcc $(CFLAGS) -MMD -MF $@.d -o $@ -c $<
+		remake -r < $@.d
+		rm $@.d
+
+### Automatic variables
+
+Special symbols <tt>$&lt;</tt>, <tt>$^</tt>, and <tt>$@</tt>, can appear
+inside scripts:
+
+- <tt>$&lt;</tt> expands to the first static prerequisite of the rule.
+- <tt>$^</tt> expands to all the static prerequisites of the rule, including
+  duplicates if any.
+- <tt>$@</tt> expands to the first target of the rule.
+
+Symbol <tt>$$</tt> expands to a single dollar symbol.
 
 ### Built-in functions
 
@@ -123,8 +145,6 @@ shell variables there.
   by prepending its first argument to each element of its second argument.
 - <tt>$(addsuffix <i>suffix</i>, <i>list</i>)</tt> returns the list obtained
   by appending its first argument to each element of its second argument.
-
-Note that functions are ignored inside scripts.
 
 Semantics
 ---------
@@ -248,22 +268,17 @@ Differences with <b>redo</b>:
   needs to be rebuilt. It does not assume it to be up-to-date. As with
   <b>redo</b> though, if its obsolete status would be due to a dynamic
   dependency, it will go unnoticed; it should be removed beforehand.
-- <b>remake</b> has almost no features: no checksum-based dependencies, no
-  compatibility with token servers, etc.
-
-Differences with both <b>make</b> and <b>redo</b>:
-
 - Multiple targets are supported.
-- When executing shell scripts, positional variables <tt>$1</tt>,
-  <tt>$2</tt>, etc, point to the target names of the rule obtained after
-  substituting <tt>%</tt>. No other variables are defined.
+- <b>remake</b> has almost no features: no checksum-based dependencies, no
+  compatibility with job servers, etc.
 
 Limitations
 -----------
 
-- When the user or a script calls <b>remake</b>, the current working
-  directory should be the one containing <b>Remakefile</b> (and thus
-  <b>.remake</b> too).
+- When the user calls <b>remake</b>, the current working directory should be
+  the one containing <b>.remake</b>. Rules are understood relatively to this
+  directory. If a rule script calls <b>remake</b>, the current working
+  directory should be the same as the one from the original <b>remake</b>.
 - Some cases of ill-formed rules are not caught by <b>remake</b> and can
   thus lead to unpredictable behaviors.
 
