@@ -1009,11 +1009,6 @@ struct generator
 };
 
 /**
- * Variable modifiers.
- */
-static assign_list const *local_variables = NULL;
-
-/**
  * Generator for the words of a variable.
  */
 struct variable_generator: generator
@@ -1021,11 +1016,12 @@ struct variable_generator: generator
 	std::string name;
 	string_list::const_iterator cur1, end1;
 	assign_list::const_iterator cur2, end2;
-	variable_generator(std::string const &);
+	variable_generator(std::string const &, assign_list const *);
 	input_status next(std::string &);
 };
 
-variable_generator::variable_generator(std::string const &n): name(n)
+variable_generator::variable_generator(std::string const &n,
+	assign_list const *local_variables): name(n)
 {
 	bool append = true;
 	if (local_variables)
@@ -1083,8 +1079,6 @@ input_status variable_generator::next(std::string &res)
 	return Eof;
 }
 
-static generator *get_function(std::istream &, std::string const &);
-
 /**
  * Generator for the words of an input stream.
  */
@@ -1092,12 +1086,15 @@ struct input_generator
 {
 	std::istream &in;
 	generator *nested;
+	assign_list const *local_variables;
 	bool earliest_exit, done;
-	input_generator(std::istream &i, bool e = false)
-		: in(i), nested(NULL), earliest_exit(e), done(false) {}
+	input_generator(std::istream &i, assign_list const *lv, bool e = false)
+		: in(i), nested(NULL), local_variables(lv), earliest_exit(e), done(false) {}
 	input_status next(std::string &);
 	~input_generator() { assert(!nested); }
 };
+
+static generator *get_function(input_generator const &, std::string const &);
 
 input_status input_generator::next(std::string &res)
 {
@@ -1122,10 +1119,10 @@ input_status input_generator::next(std::string &res)
 		std::string name = read_word(in);
 		if (name.empty()) return SyntaxError;
 		if (expect_token(in, Rightpar))
-			nested = new variable_generator(name);
+			nested = new variable_generator(name, local_variables);
 		else
 		{
-			nested = get_function(in, name);
+			nested = get_function(*this, name);
 			if (!nested) return SyntaxError;
 		}
 		goto restart;
@@ -1153,7 +1150,7 @@ static bool read_words(input_generator &in, string_list &res)
 
 static bool read_words(std::istream &in, string_list &res)
 {
-	input_generator gen(in);
+	input_generator gen(in, NULL);
 	return read_words(gen, res);
 }
 
@@ -1167,11 +1164,12 @@ struct addprefix_generator: generator
 	string_list::const_iterator prei;
 	size_t prej, prel;
 	std::string suf;
-	addprefix_generator(std::istream &, bool &);
+	addprefix_generator(input_generator const &, bool &);
 	input_status next(std::string &);
 };
 
-addprefix_generator::addprefix_generator(std::istream &in, bool &ok): gen(in)
+addprefix_generator::addprefix_generator(input_generator const &top, bool &ok)
+	: gen(top.in, top.local_variables)
 {
 	if (!read_words(gen, pre)) return;
 	if (!expect_token(gen.in, Comma)) return;
@@ -1222,11 +1220,12 @@ struct addsuffix_generator: generator
 	string_list::const_iterator sufi;
 	size_t sufj, sufl;
 	std::string pre;
-	addsuffix_generator(std::istream &, bool &);
+	addsuffix_generator(input_generator const &, bool &);
 	input_status next(std::string &);
 };
 
-addsuffix_generator::addsuffix_generator(std::istream &in, bool &ok): gen(in)
+addsuffix_generator::addsuffix_generator(input_generator const &top, bool &ok)
+	: gen(top.in, top.local_variables)
 {
 	if (!read_words(gen, suf)) return;
 	if (!expect_token(gen.in, Comma)) return;
@@ -1262,9 +1261,9 @@ input_status addsuffix_generator::next(std::string &res)
 	}
 }
 
-generator *get_function(std::istream &in, std::string const &name)
+generator *get_function(input_generator const &in, std::string const &name)
 {
-	skip_spaces(in);
+	skip_spaces(in.in);
 	generator *g = NULL;
 	bool ok = false;
 	if (name == "addprefix") g = new addprefix_generator(in, ok);
@@ -1873,7 +1872,6 @@ static std::string prepare_script(rule_t const &rule)
 	std::istringstream in(s);
 	std::ostringstream out;
 	size_t len = s.size();
-	local_variables = &rule.vars;
 
 	while (!in.eof())
 	{
@@ -1915,7 +1913,7 @@ static std::string prepare_script(rule_t const &rule)
 		{
 			in.seekg(p - 1);
 			bool first = true;
-			input_generator gen(in, true);
+			input_generator gen(in, &rule.vars, true);
 			while (true)
 			{
 				std::string w;
