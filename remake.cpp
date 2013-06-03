@@ -1533,11 +1533,11 @@ static void save_dependencies()
 }
 
 /**
- * Load rules.
+ * Load rules from @a remakefile.
  * If some rules have dependencies and non-generic targets, add these
  * dependencies to the targets.
  */
-static void load_rules()
+static void load_rules(std::string const &remakefile)
 {
 	DEBUG_open << "Loading rules... ";
 	if (false)
@@ -1546,7 +1546,7 @@ static void load_rules()
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
 		exit(EXIT_FAILURE);
 	}
-	std::ifstream in("Remakefile");
+	std::ifstream in(remakefile.c_str());
 	if (!in.good())
 	{
 		std::cerr << "Failed to load rules: no Remakefile found" << std::endl;
@@ -2466,22 +2466,22 @@ void server_loop()
  * If Remakefile is obsolete, perform a first run with it only, then reload
  * the rules, and perform a second with the original clients.
  */
-void server_mode(string_list const &targets)
+void server_mode(std::string const &remakefile, string_list const &targets)
 {
 	load_dependencies();
-	load_rules();
+	load_rules(remakefile);
 	create_server();
-	if (get_status("Remakefile").status != Uptodate)
+	if (get_status(remakefile).status != Uptodate)
 	{
 		clients.push_back(client_t());
-		clients.back().pending.push_back("Remakefile");
+		clients.back().pending.push_back(remakefile);
 		server_loop();
 		if (build_failure) goto early_exit;
 		variables.clear();
 		specific_rules.clear();
 		generic_rules.clear();
 		first_target.clear();
-		load_rules();
+		load_rules(remakefile);
 	}
 	clients.push_back(client_t());
 	if (!targets.empty()) clients.back().pending = targets;
@@ -2572,6 +2572,7 @@ void usage(int exit_status)
 		"Options\n"
 		"  -d                     Echo script commands.\n"
 		"  -d -d                  Print lots of debugging information.\n"
+		"  -f FILE                Read FILE as Remakefile.\n"
 		"  -h, --help             Print this message and exit.\n"
 		"  -j[N], --jobs=[N]      Allow N jobs at once; infinite jobs with no arg.\n"
 		"  -k                     Keep going when some targets cannot be made.\n"
@@ -2595,6 +2596,7 @@ int main(int argc, char *argv[])
 {
 	init_working_dir();
 
+	std::string remakefile = "Remakefile";
 	string_list targets;
 	bool indirect_targets = false;
 
@@ -2613,13 +2615,18 @@ int main(int argc, char *argv[])
 			show_targets = false;
 		else if (arg == "-r")
 			indirect_targets = true;
+		else if (arg == "-f")
+		{
+			if (++i == argc) usage(EXIT_FAILURE);
+			remakefile = argv[i];
+		}
 		else if (arg.compare(0, 2, "-j") == 0)
 			max_active_jobs = atoi(arg.c_str() + 2);
 		else if (arg.compare(0, 7, "--jobs=") == 0)
 			max_active_jobs = atoi(arg.c_str() + 7);
 		else
 		{
-			if (arg[0] == '-') usage(1);
+			if (arg[0] == '-') usage(EXIT_FAILURE);
 			targets.push_back(normalize(arg));
 			DEBUG << "New target: " << arg << '\n';
 		}
@@ -2662,5 +2669,5 @@ int main(int argc, char *argv[])
 	if (char *sn = getenv("REMAKE_SOCKET")) client_mode(sn, targets);
 
 	// Otherwise run as server.
-	server_mode(targets);
+	server_mode(remakefile, targets);
 }
