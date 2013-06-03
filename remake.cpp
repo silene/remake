@@ -6,22 +6,22 @@ named <b>Remakefile</b>. It contains rules with a <em>make</em>-like
 syntax:
 
 @verbatim
-target1 target2 ... : dependency1 dependency2 ...
+target1 target2 ... : prerequisite1 prerequisite2 ...
 	shell script
 	that builds
 	the targets
 @endverbatim
 
-A target is known to be up-to-date if all its dependencies are. If it
-has no known dependencies yet the file already exits, it is assumed to
+A target is known to be up-to-date if all its prerequisites are. If it
+has no known prerequisites yet the file already exits, it is assumed to
 be up-to-date. Obsolete targets are rebuilt thanks to the shell script
 provided by the rule.
 
 As with <b>redo</b>, <b>remake</b> supports dynamic dependencies in
 addition to these static dependencies. Whenever a script executes
-<tt>remake dependency4 dependency5 ...</tt>, these dependencies are
+<tt>remake prerequisite4 prerequisite5 ...</tt>, these prerequisites are
 rebuilt if they are obsolete. (So <b>remake</b> acts like
-<b>redo-ifchange</b>.) Moreover, these dependencies are stored in file
+<b>redo-ifchange</b>.) Moreover, all the dependencies are stored in file
 <b>.remake</b> so that they are remembered in subsequent runs. Note that
 dynamic dependencies from previous runs are only used to decide whether a
 target is obsolete; they are not automatically rebuilt when they are
@@ -31,16 +31,16 @@ dynamic call to <b>remake</b> is executed.
 In other words, the following two rules have almost the same behavior.
 
 @verbatim
-target1 target2 ... : dependency1 dependency2 ...
+target1 target2 ... : prerequisite1 prerequisite2 ...
 	shell script
 
 target1 target2 ... :
-	remake dependency1 dependency2 ...
+	remake prerequisite1 prerequisite2 ...
 	shell script
 @endverbatim
 
 (There is a difference if the targets already exist, have never been
-built before, and the dependencies are either younger or obsolete, since
+built before, and the prerequisites are either younger or obsolete, since
 the targets will not be rebuilt in the second case.)
 
 The above usage of dynamic dependencies is hardly useful. Their strength
@@ -58,7 +58,7 @@ lies in the fact that they can be computed on the fly:
 
 after.xml: before.xml rules.xsl
 	xsltproc --load-trace -o after.xml rules.xsl before.xml 2> deps
-	remake $(sed -n -e "\\,//,! s,^.*URL=\"\\([^\"]*\\).*\$,\\1,p" deps)
+	remake `sed -n -e "\\,//,! s,^.*URL=\"\\([^\"]*\\).*\$,\\1,p" deps`
 	rm deps
 @endverbatim
 
@@ -112,7 +112,7 @@ quoted names.
 
 \subsection sec-variables Variables
 
-Variables can be used to factor lists of targets or dependencies. They are
+Variables can be used to factor lists of targets or prerequisites. They are
 expanded as they are encountered during <b>Remakefile</b> parsing.
 
 @verbatim
@@ -164,10 +164,10 @@ A target is obsolete:
 
 - if there is no file corresponding to the target, or to one of its siblings
   in a multi-target rule,
-- if any of its dynamic dependencies from a previous run or any of its static
+- if any of its dynamic prerequisites from a previous run or any of its static
   prerequisites is obsolete,
 - if the latest file corresponding to its siblings or itself is older than any
-  of its dynamic dependencies or static prerequisites.
+  of its dynamic prerequisites or static prerequisites.
 
 In all the other cases, it is assumed to be up-to-date (and so are all its
 siblings). Note that the last rule above says "latest" and not "earliest". While
@@ -188,9 +188,9 @@ rather than <tt>stamp-config_h</tt> would defeat the point of not updating it
 in the first place, since the program files would need to be rebuilt.
 
 Once all the static prerequisites of a target have been rebuilt, <b>remake</b>
-checks if the target still needs to be built. If it was obsolete only because
-its dependencies needed to be rebuilt and none of them changed, the target is
-assumed to be up-to-date.
+checks whether the target still needs to be built. If it was obsolete only
+because its prerequisites needed to be rebuilt and none of them changed, the
+target is assumed to be up-to-date.
 
 \subsection sec-rules How are targets (re)built?
 
@@ -260,7 +260,7 @@ Differences with <b>make</b>:
   rather than one per script line. Note that the shells are run with
   option <tt>-e</tt>, thus causing them to exit as soon as an error is
   encountered.
-- The dependencies of generic rules (known as implicit rules in make lingo)
+- The prerequisites of generic rules (known as implicit rules in make lingo)
   are not used to decide between several of them. <b>remake</b> does not
   select one for which it could satisfy the dependencies.
 - Variables and built-in functions are expanded as they are encountered
@@ -278,7 +278,7 @@ Remakefile: Remakefile.in ./config.status
   uses the static prerequisites of rules mentioning it to check whether it
   needs to be rebuilt. It does not assume it to be up-to-date. As with
   <b>redo</b> though, if its obsolete status would be due to a dynamic
-  dependency, it will go unnoticed; it should be removed beforehand.
+  prerequisite, it will go unnoticed; it should be removed beforehand.
 - Multiple targets are supported.
 - <b>remake</b> has almost no features: no checksum-based dependencies, no
   compatibility with job servers, etc.
@@ -759,6 +759,12 @@ static std::ostream &operator<<(std::ostream &out, escape_string const &se)
 }
 
 /**
+ * @defgroup paths Path helpers
+ *
+ * @{
+ */
+
+/**
  * Initialize #working_dir.
  */
 void init_working_dir()
@@ -853,6 +859,14 @@ static void normalize_list(string_list &l)
 		*i = normalize(*i);
 	}
 }
+
+/** @} */
+
+/**
+ * @defgroup lexer Lexer
+ *
+ * @{
+ */
 
 /**
  * Skip spaces.
@@ -992,6 +1006,17 @@ static std::string read_word(std::istream &in)
 	}
 }
 
+/** @} */
+
+/**
+ * @defgroup stream Token streams
+ *
+ * @{
+ */
+
+/**
+ * Possible results from word producers.
+ */
 enum input_status
 {
 	Success,
@@ -1261,6 +1286,9 @@ input_status addsuffix_generator::next(std::string &res)
 	}
 }
 
+/**
+ * Return a generator for function @a name.
+ */
 generator *get_function(input_generator const &in, std::string const &name)
 {
 	skip_spaces(in.in);
@@ -1272,6 +1300,14 @@ generator *get_function(input_generator const &in, std::string const &name)
 	delete g;
 	return NULL;
 }
+
+/** @} */
+
+/**
+ * @defgroup database Dependency database
+ *
+ * @{
+ */
 
 /**
  * Load dependencies from @a in.
@@ -1321,6 +1357,41 @@ static void load_dependencies()
 	}
 	load_dependencies(in);
 }
+
+
+/**
+ * Save all the dependencies in file <tt>.remake</tt>.
+ */
+static void save_dependencies()
+{
+	DEBUG_open << "Saving database... ";
+	std::ofstream db(".remake");
+	while (!dependencies.empty())
+	{
+		ref_ptr<dependency_t> dep = dependencies.begin()->second;
+		for (string_list::const_iterator i = dep->targets.begin(),
+		     i_end = dep->targets.end(); i != i_end; ++i)
+		{
+			db << escape_string(*i) << ' ';
+			dependencies.erase(*i);
+		}
+		db << ':';
+		for (string_set::const_iterator i = dep->deps.begin(),
+		     i_end = dep->deps.end(); i != i_end; ++i)
+		{
+			db << ' ' << escape_string(*i);
+		}
+		db << std::endl;
+	}
+}
+
+/** @} */
+
+/**
+ * @defgroup parser Rule parser
+ *
+ * @{
+ */
 
 /**
  * Register a specific rule with an empty script:
@@ -1523,32 +1594,6 @@ static void load_rule(std::istream &in, std::string const &first)
 }
 
 /**
- * Save all the dependencies in file <tt>.remake</tt>.
- */
-static void save_dependencies()
-{
-	DEBUG_open << "Saving database... ";
-	std::ofstream db(".remake");
-	while (!dependencies.empty())
-	{
-		ref_ptr<dependency_t> dep = dependencies.begin()->second;
-		for (string_list::const_iterator i = dep->targets.begin(),
-		     i_end = dep->targets.end(); i != i_end; ++i)
-		{
-			db << escape_string(*i) << ' ';
-			dependencies.erase(*i);
-		}
-		db << ':';
-		for (string_set::const_iterator i = dep->deps.begin(),
-		     i_end = dep->deps.end(); i != i_end; ++i)
-		{
-			db << ' ' << escape_string(*i);
-		}
-		db << std::endl;
-	}
-}
-
-/**
  * Load rules from @a remakefile.
  * If some rules have dependencies and non-generic targets, add these
  * dependencies to the targets.
@@ -1600,6 +1645,14 @@ static void load_rules(std::string const &remakefile)
 		else load_rule(in, std::string());
 	}
 }
+
+/** @} */
+
+/**
+ * @defgroup rules Rule resolution
+ *
+ * @{
+ */
 
 /**
  * Substitute a pattern into a list of strings.
@@ -1694,6 +1747,14 @@ static rule_t find_rule(std::string const &target)
 	}
 	return grule;
 }
+
+/** @} */
+
+/**
+ * @defgroup status Target status
+ *
+ * @{
+ */
 
 /**
  * Compute and memoize the status of @a target:
@@ -1805,7 +1866,7 @@ static void update_status(std::string const &target)
 }
 
 /**
- * Check if all the prerequisites of @a target ended being up-to-date.
+ * Check whether all the prerequisites of @a target ended being up-to-date.
  */
 static bool still_need_rebuild(std::string const &target)
 {
@@ -1829,6 +1890,14 @@ static bool still_need_rebuild(std::string const &target)
 	DEBUG_close << "no longer obsolete\n";
 	return false;
 }
+
+/** @} */
+
+/**
+ * @defgroup server Server
+ *
+ * @{
+ */
 
 /**
  * Handle job completion.
@@ -2526,6 +2595,14 @@ void server_mode(std::string const &remakefile, string_list const &targets)
 	exit(build_failure ? EXIT_FAILURE : EXIT_SUCCESS);
 }
 
+/** @} */
+
+/**
+ * @defgroup client Client
+ *
+ * @{
+ */
+
 /**
  * Connect to the server @a socket_name, send a build request for @a targets,
  * and exit with the status returned by the server.
@@ -2590,6 +2667,14 @@ void client_mode(char *socket_name, string_list const &targets)
 	if (recv(socket_fd, &result, 1, 0) != 1) exit(EXIT_FAILURE);
 	exit(result ? EXIT_SUCCESS : EXIT_FAILURE);
 }
+
+/** @} */
+
+/**
+ * @defgroup ui User interface
+ *
+ * @{
+ */
 
 /**
  * Display usage and exit with @a exit_status.
@@ -2699,3 +2784,5 @@ int main(int argc, char *argv[])
 	// Otherwise run as server.
 	server_mode(remakefile, targets);
 }
+
+/** @} */

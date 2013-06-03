@@ -5,21 +5,21 @@ As with <b>make</b>, <b>remake</b> uses a centralized rule file, which is
 named <b>Remakefile</b>. It contains rules with a <em>make</em>-like
 syntax:
 
-	target1 target2 ... : dependency1 dependency2 ...
+	target1 target2 ... : prerequisite1 prerequisite2 ...
 		shell script
 		that builds
 		the targets
 
-A target is known to be up-to-date if all its dependencies are. If it
-has no known dependencies yet the file already exits, it is assumed to
+A target is known to be up-to-date if all its prerequisites are. If it
+has no known prerequisites yet the file already exits, it is assumed to
 be up-to-date. Obsolete targets are rebuilt thanks to the shell script
 provided by the rule.
 
 As with <b>redo</b>, <b>remake</b> supports dynamic dependencies in
 addition to these static dependencies. Whenever a script executes
-<tt>remake dependency4 dependency5 ...</tt>, these dependencies are
+<tt>remake prerequisite4 prerequisite5 ...</tt>, these prerequisites are
 rebuilt if they are obsolete. (So <b>remake</b> acts like
-<b>redo-ifchange</b>.) Moreover, these dependencies are stored in file
+<b>redo-ifchange</b>.) Moreover, all the dependencies are stored in file
 <b>.remake</b> so that they are remembered in subsequent runs. Note that
 dynamic dependencies from previous runs are only used to decide whether a
 target is obsolete; they are not automatically rebuilt when they are
@@ -28,15 +28,15 @@ dynamic call to <b>remake</b> is executed.
 
 In other words, the following two rules have almost the same behavior.
 
-	target1 target2 ... : dependency1 dependency2 ...
+	target1 target2 ... : prerequisite1 prerequisite2 ...
 		shell script
 
 	target1 target2 ... :
-		remake dependency1 dependency2 ...
+		remake prerequisite1 prerequisite2 ...
 		shell script
 
 (There is a difference if the targets already exist, have never been
-built before, and the dependencies are either younger or obsolete, since
+built before, and the prerequisites are either younger or obsolete, since
 the targets will not be rebuilt in the second case.)
 
 The above usage of dynamic dependencies is hardly useful. Their strength
@@ -53,7 +53,7 @@ lies in the fact that they can be computed on the fly:
 
 	after.xml: before.xml rules.xsl
 		xsltproc --load-trace -o after.xml rules.xsl before.xml 2> deps
-		remake $(sed -n -e "\\,//,! s,^.*URL=\"\\([^\"]*\\).*\$,\\1,p" deps)
+		remake `sed -n -e "\\,//,! s,^.*URL=\"\\([^\"]*\\).*\$,\\1,p" deps`
 		rm deps
 
 Note that the first rule fails if any of the header files included by
@@ -106,7 +106,7 @@ quoted names.
 
 ### Variables
 
-Variables can be used to factor lists of targets or dependencies. They are
+Variables can be used to factor lists of targets or prerequisites. They are
 expanded as they are encountered during <b>Remakefile</b> parsing.
 
 	VAR2 = a
@@ -155,10 +155,10 @@ A target is obsolete:
 
 - if there is no file corresponding to the target, or to one of its siblings
   in a multi-target rule,
-- if any of its dynamic dependencies from a previous run or any of its static
+- if any of its dynamic prerequisites from a previous run or any of its static
   prerequisites is obsolete,
 - if the latest file corresponding to its siblings or itself is older than any
-  of its dynamic dependencies or static prerequisites.
+  of its dynamic prerequisites or static prerequisites.
 
 In all the other cases, it is assumed to be up-to-date (and so are all its
 siblings). Note that the last rule above says "latest" and not "earliest". While
@@ -177,9 +177,9 @@ rather than <tt>stamp-config\_h</tt> would defeat the point of not updating it
 in the first place, since the program files would need to be rebuilt.
 
 Once all the static prerequisites of a target have been rebuilt, <b>remake</b>
-checks if the target still needs to be built. If it was obsolete only because
-its dependencies needed to be rebuilt and none of them changed, the target is
-assumed to be up-to-date.
+checks whether the target still needs to be built. If it was obsolete only
+because its prerequisites needed to be rebuilt and none of them changed, the
+target is assumed to be up-to-date.
 
 ### How are targets (re)built?
 
@@ -249,7 +249,7 @@ Differences with <b>make</b>:
   rather than one per script line. Note that the shells are run with
   option <tt>-e</tt>, thus causing them to exit as soon as an error is
   encountered.
-- The dependencies of generic rules (known as implicit rules in make lingo)
+- The prerequisites of generic rules (known as implicit rules in make lingo)
   are not used to decide between several of them. <b>remake</b> does not
   select one for which it could satisfy the dependencies.
 - Variables and built-in functions are expanded as they are encountered
@@ -267,7 +267,7 @@ Differences with <b>redo</b>:
   uses the static prerequisites of rules mentioning it to check whether it
   needs to be rebuilt. It does not assume it to be up-to-date. As with
   <b>redo</b> though, if its obsolete status would be due to a dynamic
-  dependency, it will go unnoticed; it should be removed beforehand.
+  prerequisite, it will go unnoticed; it should be removed beforehand.
 - Multiple targets are supported.
 - <b>remake</b> has almost no features: no checksum-based dependencies, no
   compatibility with job servers, etc.
