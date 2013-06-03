@@ -10,7 +10,7 @@ t%st: af
 	cat af bf cf > /dev/null
 
 %f:
-	touch \$\$1
+	touch \$@
 
 test: bf
 

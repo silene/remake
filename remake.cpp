@@ -1865,12 +1865,23 @@ static std::string prepare_script(rule_t const &rule)
 		out.write(&s[pos], p - pos);
 		if (p == len) break;
 		++p;
-		if (s[p] == '$')
+		switch (s[p])
 		{
+		case '$':
 			out << '$';
 			in.seekg(p + 1);
-		}
-		else if (s[p] == '(')
+			break;
+		case '<':
+			if (!rule.deps.empty())
+				out << rule.deps.front();
+			in.seekg(p + 1);
+			break;
+		case '@':
+			assert(!rule.targets.empty());
+			out << rule.targets.front();
+			in.seekg(p + 1);
+			break;
+		case '(':
 		{
 			in.seekg(p - 1);
 			bool first = true;
@@ -1889,11 +1900,14 @@ static std::string prepare_script(rule_t const &rule)
 				else out << ' ';
 				out << w;
 			}
+			break;
 		}
-		else
-		{
-			// TODO
-			in.seekg(p + 1);
+		default:
+			// Let dollars followed by an unrecognized character
+			// go through. This differs from Make, which would
+			// use a one-letter variable.
+			out << '$';
+			in.seekg(p);
 		}
 	}
 
