@@ -125,17 +125,25 @@ generic rule.
 		remake -r < $@.d
 		rm $@.d
 
+Note: contrarily to <b>make</b>, variable names have to be enclosed in
+parentheses. For instance, <tt>$y</tt> is not a shorthand for <tt>$(y)</tt> and
+is left unexpanded.
+
 ### Automatic variables
 
-Special symbols <tt>$&lt;</tt>, <tt>$^</tt>, and <tt>$@</tt>, can appear
-inside scripts:
+The following special symbols can appear inside scripts:
 
 - <tt>$&lt;</tt> expands to the first static prerequisite of the rule.
 - <tt>$^</tt> expands to all the static prerequisites of the rule, including
   duplicates if any.
 - <tt>$@</tt> expands to the first target of the rule.
+- <tt>$*</tt> expands to the string that matched <tt>%</tt> in a generic rule.
+- <tt>$$</tt> expands to a single dollar symbol.
 
-Symbol <tt>$$</tt> expands to a single dollar symbol.
+Note: contrarily to <b>make</b>, there are no corresponding variables. For
+instance, <tt>$^</tt> is not a shorthand for <tt>$(^)</tt>. Another
+difference is that <tt>$@</tt> is always the first target, not the one that
+triggered the rule.
 
 ### Built-in functions
 
