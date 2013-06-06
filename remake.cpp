@@ -2702,7 +2702,7 @@ void usage(int exit_status)
 		"  -h, --help             Print this message and exit.\n"
 		"  -j[N], --jobs=[N]      Allow N jobs at once; infinite jobs with no arg.\n"
 		"  -k                     Keep going when some targets cannot be made.\n"
-		"  -r                     Look up targets from the dependencies on standard input.\n"
+		"  -r                     Look up targets from the dependencies on stdin.\n"
 		"  -s, --silent, --quiet  Do not echo targets.\n";
 	exit(exit_status);
 }
