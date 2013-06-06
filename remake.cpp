@@ -2114,7 +2114,9 @@ static bool run_script(int job_id, rule_t const &rule)
 	}
 	if (pipe(pfd) == -1)
 		goto error;
-	if (pid_t pid = fork())
+	if (setenv("REMAKE_JOB_ID", job_id_.c_str(), 1))
+		goto error2;
+	if (pid_t pid = vfork())
 	{
 		if (pid == -1) goto error2;
 		ssize_t len = script.length();
@@ -2126,9 +2128,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		job_pids[pid] = job_id;
 		return true;
 	}
-	// Child process starts here.
-	if (setenv("REMAKE_JOB_ID", job_id_.c_str(), 1))
-		_exit(EXIT_FAILURE);
+	// Child process starts here. Notice the use of vfork above.
 	char const *argv[5] = { "sh", "-e", "-s", NULL, NULL };
 	if (echo_scripts) argv[3] = "-v";
 	if (pfd[0] != 0)
@@ -2137,7 +2137,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		close(pfd[0]);
 	}
 	close(pfd[1]);
-	execv("/bin/sh", (char **)argv);
+	execve("/bin/sh", (char **)argv, environ);
 	_exit(EXIT_FAILURE);
 #endif
 }
