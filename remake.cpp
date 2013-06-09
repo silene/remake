@@ -405,6 +405,7 @@ typedef SOCKET socket_t;
 #include <sys/wait.h>
 typedef int socket_t;
 enum { INVALID_SOCKET = -1 };
+extern char **environ;
 #endif
 
 #if defined(WINDOWS) || defined(MACOSX)
