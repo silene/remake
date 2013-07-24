@@ -308,7 +308,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.8
+@version 0.9
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify
@@ -2200,7 +2200,7 @@ static void complete_request(client_t &client, bool success)
 	else if (client.socket != INVALID_SOCKET)
 	{
 		char res = success ? 1 : 0;
-		send(client.socket, &res, 1, 0);
+		send(client.socket, &res, 1, MSG_NOSIGNAL);
 	#ifdef WINDOWS
 		closesocket(client.socket);
 	#else
@@ -2665,7 +2665,7 @@ void client_mode(char *socket_name, string_list const &targets)
 	if (send(socket_fd, (char *)&job_id, sizeof(job_id), MSG_NOSIGNAL) != sizeof(job_id))
 		goto error;
 
-	// Send tagets.
+	// Send targets.
 	for (string_list::const_iterator i = targets.begin(),
 	     i_end = targets.end(); i != i_end; ++i)
 	{
