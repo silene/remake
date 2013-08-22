@@ -377,6 +377,7 @@ When building a target, the following sequence of events happens:
 #include <vector>
 #include <cassert>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <errno.h>
 #include <fcntl.h>
