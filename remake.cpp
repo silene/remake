@@ -1816,7 +1816,7 @@ static status_t const &get_status(std::string const &target)
 		status[*k].last = s.st_mtime;
 		if (s.st_mtime > latest) latest = s.st_mtime;
 	}
-	if (st == Todo) goto update;
+	if (st != Uptodate) goto update;
 	for (string_set::const_iterator k = dep.deps.begin(),
 	     k_end = dep.deps.end(); k != k_end; ++k)
 	{
@@ -1827,10 +1827,11 @@ static status_t const &get_status(std::string const &target)
 			st = Todo;
 			goto update;
 		}
-		if (ts_.status == Uptodate) continue;
-		if (st == Uptodate)
+		if (ts_.status != Uptodate && st != Recheck)
+		{
 			DEBUG << "obsolete dependency " << *k << std::endl;
-		st = Recheck;
+			st = Recheck;
+		}
 	}
 	if (st == Uptodate) DEBUG_close << "all siblings up-to-date\n";
 	update:
