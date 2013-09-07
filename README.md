@@ -86,14 +86,16 @@ scripts. They are only allowed after a rule header.
 Lines starting with <tt>#</tt> are considered to be comments and are ignored.
 They do interrupt rule scripts though.
 
-Any other line is either a rule header or a variable definition. If such a
+Any other line is either a variable definition or a rule header. If such a
 line ends with a backslash, the following line break is ignored and the line
 extends to the next one.
 
+Variable definitions are a single name followed by equal followed by a list
+of names, possibly empty.
+
 Rule headers are a nonempty list of names, followed by a colon, followed by
-another list of names, possibly empty. Variable definitions are a single
-name followed by equal followed by a list of names, possibly empty. Basically,
-the syntax of a rule is as follows:
+another list of names, possibly empty. Basically, the syntax of a rule is as
+follows:
 
 	targets : prerequisites
 		shell script
@@ -154,6 +156,22 @@ triggered the rule.
 - <tt>$(addsuffix <i>suffix</i>, <i>list</i>)</tt> returns the list obtained
   by appending its first argument to each element of its second argument.
 
+### Order-only prerequisites
+
+If the static prerequisites of a rule contain a pipe symbol, prerequisites
+on its right do not cause the targets to become obsolete if they are newer
+(unless they are also dynamically registered as dependencies). They are
+meant to be used when the targets do not directly depend on them, but the
+computation of their dynamic dependencies does.
+
+	%.o : %.c | parser.h
+		gcc -MMD -MF $@.d -o $@ -c $<
+		remake -r < $@.d
+		rm $@.d
+
+	parser.c parser.h: parser.y
+		yacc -d -o parser.c parser.y
+
 Semantics
 ---------
 
@@ -206,7 +224,7 @@ When <b>remake</b> tries to build a given target, it looks for a specific rule
 that matches it. If there is one and its script is nonempty, it uses it to
 rebuild the target.
 
-Otherwise, it looks for a generic rule that match the target. If there are
+Otherwise, it looks for a generic rule that matches the target. If there are
 several matching rules, it chooses the one with the shortest pattern (and if
 there are several ones, the earliest one). <b>remake</b> then looks for
 specific rules that match each target of the generic rule. All the

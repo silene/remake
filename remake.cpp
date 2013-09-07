@@ -90,14 +90,16 @@ scripts. They are only allowed after a rule header.
 Lines starting with <tt>#</tt> are considered to be comments and are ignored.
 They do interrupt rule scripts though.
 
-Any other line is either a rule header or a variable definition. If such a
+Any other line is either a variable definition or a rule header. If such a
 line ends with a backslash, the following line break is ignored and the line
 extends to the next one.
 
+Variable definitions are a single name followed by equal followed by a list
+of names, possibly empty.
+
 Rule headers are a nonempty list of names, followed by a colon, followed by
-another list of names, possibly empty. Variable definitions are a single
-name followed by equal followed by a list of names, possibly empty. Basically,
-the syntax of a rule is as follows:
+another list of names, possibly empty. Basically, the syntax of a rule is as
+follows:
 
 @verbatim
 targets : prerequisites
@@ -164,6 +166,24 @@ triggered the rule.
 - <tt>$(addsuffix <i>suffix</i>, <i>list</i>)</tt> returns the list obtained
   by appending its first argument to each element of its second argument.
 
+\subsection sec-order Order-only prerequisites
+
+If the static prerequisites of a rule contain a pipe symbol, prerequisites
+on its right do not cause the targets to become obsolete if they are newer
+(unless they are also dynamically registered as dependencies). They are
+meant to be used when the targets do not directly depend on them, but the
+computation of their dynamic dependencies does.
+
+@verbatim
+%.o : %.c | parser.h
+	gcc -MMD -MF $@.d -o $@ -c $<
+	remake -r < $@.d
+	rm $@.d
+
+parser.c parser.h: parser.y
+	yacc -d -o parser.c parser.y
+@endverbatim
+
 \section sec-semantics Semantics
 
 \subsection src-obsolete When are targets obsolete?
@@ -217,7 +237,7 @@ When <b>remake</b> tries to build a given target, it looks for a specific rule
 that matches it. If there is one and its script is nonempty, it uses it to
 rebuild the target.
 
-Otherwise, it looks for a generic rule that match the target. If there are
+Otherwise, it looks for a generic rule that matches the target. If there are
 several matching rules, it chooses the one with the shortest pattern (and if
 there are several ones, the earliest one). <b>remake</b> then looks for
 specific rules that match each target of the generic rule. All the
@@ -505,7 +525,8 @@ typedef std::list<assign_t> assign_list;
 struct rule_t
 {
 	string_list targets; ///< Files produced by this rule.
-	string_list deps;    ///< Files used for an implicit call to remake at the start of the script.
+	string_list deps;    ///< Dependencies used for an implicit call to remake at the start of the script.
+	string_list wdeps;   ///< Like #deps, except that they are not registered as dependencies.
 	assign_list vars;    ///< Values of variables.
 	std::string script;  ///< Shell script for building the targets.
 	std::string stem;    ///< String used to instantiate a generic rule.
@@ -923,6 +944,7 @@ enum
   Rightpar   = 1 << 5,
   Comma      = 1 << 6,
   Plusequal  = 1 << 7,
+  Pipe       = 1 << 8,
 };
 
 /**
@@ -947,6 +969,7 @@ static int expect_token(std::istream &in, int mask)
 		case ',': tok = Comma; break;
 		case '=': tok = Equal; break;
 		case ')': tok = Rightpar; break;
+		case '|': tok = Pipe; break;
 		case '$':
 			if (!(mask & Dollarpar)) return Unexpected;
 			in.ignore(1);
@@ -1435,6 +1458,7 @@ static void register_transparent_rule(rule_t const &rule, string_list const &tar
 		}
 		assert(r->targets.size() == 1 && r->targets.front() == *i);
 		r->deps.insert(r->deps.end(), rule.deps.begin(), rule.deps.end());
+		r->wdeps.insert(r->wdeps.end(), rule.wdeps.begin(), rule.wdeps.end());
 		r->vars.insert(r->vars.end(), rule.vars.begin(), rule.vars.end());
 	}
 
@@ -1523,36 +1547,38 @@ static void load_rule(std::istream &in, std::string const &first)
 	bool assignment = false;
 
 	// Read dependencies.
-	if (expect_token(in, Word))
-	{
-		std::string d = read_word(in);
-		if (int tok = expect_token(in, Equal | Plusequal))
-		{
-			rule.vars.push_back(assign_t());
-			string_list v;
-			if (!read_words(in, v)) goto error;
-			assign_t &a = rule.vars.back();
-			a.name = d;
-			a.append = tok == Plusequal;
-			a.value.swap(v);
-			assignment = true;
-		}
-		else
-		{
-			string_list v;
-			if (!read_words(in, v)) goto error;
-			v.push_front(d);
-			normalize_list(v);
-			rule.deps.swap(v);
-		}
-	}
-	else
 	{
 		string_list v;
+		if (expect_token(in, Word))
+		{
+			std::string d = read_word(in);
+			if (int tok = expect_token(in, Equal | Plusequal))
+			{
+				rule.vars.push_back(assign_t());
+				if (!read_words(in, v)) goto error;
+				assign_t &a = rule.vars.back();
+				a.name = d;
+				a.append = tok == Plusequal;
+				a.value.swap(v);
+				assignment = true;
+				goto end_line;
+			}
+			v.push_back(d);
+		}
+
 		if (!read_words(in, v)) goto error;
 		normalize_list(v);
 		rule.deps.swap(v);
+
+		if (expect_token(in, Pipe))
+		{
+			if (!read_words(in, v)) goto error;
+			normalize_list(v);
+			rule.wdeps.swap(v);
+		}
 	}
+
+	end_line:
 	skip_spaces(in);
 	if (!skip_eol(in, true)) goto error;
 
@@ -1674,7 +1700,7 @@ static void substitute_pattern(std::string const &pat, string_list const &src, s
 	     i_end = src.end(); i != i_end; ++i)
 	{
 		size_t pos = i->find('%');
-		if (pos == std::string::npos)dst.push_back(*i);
+		if (pos == std::string::npos) dst.push_back(*i);
 		else dst.push_back(i->substr(0, pos) + pat + i->substr(pos + 1));
 	}
 }
@@ -1709,6 +1735,7 @@ static rule_t find_generic_rule(std::string const &target)
 			rule.script = i->script;
 			substitute_pattern(rule.stem, i->targets, rule.targets);
 			substitute_pattern(rule.stem, i->deps, rule.deps);
+			substitute_pattern(rule.stem, i->wdeps, rule.wdeps);
 			break;
 		}
 	}
@@ -1739,6 +1766,8 @@ static rule_t find_rule(std::string const &target)
 		if (i == i_end) return grule;
 		grule.deps.insert(grule.deps.end(),
 			i->second->deps.begin(), i->second->deps.end());
+		grule.wdeps.insert(grule.wdeps.end(),
+			i->second->wdeps.begin(), i->second->wdeps.end());
 		grule.vars.insert(grule.vars.end(),
 			i->second->vars.begin(), i->second->vars.end());
 		return grule;
@@ -1753,6 +1782,8 @@ static rule_t find_rule(std::string const &target)
 		if (!i->second->script.empty()) return rule_t();
 		grule.deps.insert(grule.deps.end(),
 			i->second->deps.begin(), i->second->deps.end());
+		grule.wdeps.insert(grule.wdeps.end(),
+			i->second->wdeps.begin(), i->second->wdeps.end());
 		grule.vars.insert(grule.vars.end(),
 			i->second->vars.begin(), i->second->vars.end());
 	}
@@ -2169,11 +2200,13 @@ static bool start(std::string const &target, client_list::iterator &current)
 	}
 	int job_id = job_counter++;
 	job_targets[job_id] = rule.targets;
-	if (!rule.deps.empty())
+	if (!rule.deps.empty() || !rule.wdeps.empty())
 	{
 		current = clients.insert(current, client_t());
 		current->job_id = job_id;
 		current->pending = rule.deps;
+		current->pending.insert(current->pending.end(),
+			rule.wdeps.begin(), rule.wdeps.end());
 		current->delayed = new rule_t(rule);
 		return true;
 	}
