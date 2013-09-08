@@ -819,11 +819,12 @@ static void init_working_dir()
 		exit(EXIT_FAILURE);
 	}
 	working_dir = buf;
-
+#ifdef WINDOWS
 	for (size_t i = 0, l = working_dir.size(); i != l; ++i)
 	{
 		if (working_dir[i] == '\\') working_dir[i] = '/';
 	}
+#endif
 	prefix_dir = working_dir;
 }
 
