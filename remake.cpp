@@ -799,7 +799,7 @@ static std::ostream &operator<<(std::ostream &out, escape_string const &se)
 /**
  * Initialize #working_dir.
  */
-void init_working_dir()
+static void init_working_dir()
 {
 	char buf[1024];
 	char *res = getcwd(buf, sizeof(buf));
@@ -1323,7 +1323,7 @@ input_status addsuffix_generator::next(std::string &res)
 /**
  * Return a generator for function @a name.
  */
-generator *get_function(input_generator const &in, std::string const &name)
+static generator *get_function(input_generator const &in, std::string const &name)
 {
 	skip_spaces(in.in);
 	generator *g = NULL;
@@ -2451,7 +2451,7 @@ static void create_server()
  * Accept a connection from a client, get the job it spawned from,
  * get the targets, and mark them as dependencies of the job targets.
  */
-void accept_client()
+static void accept_client()
 {
 	DEBUG_open << "Handling client request... ";
 
@@ -2536,7 +2536,7 @@ void accept_client()
 /**
  * Handle child process exit status.
  */
-void finalize_job(pid_t pid, bool res)
+static void finalize_job(pid_t pid, bool res)
 {
 	pid_job_map::iterator i = job_pids.find(pid);
 	assert(i != job_pids.end());
@@ -2551,7 +2551,7 @@ void finalize_job(pid_t pid, bool res)
  *
  * @post There are no client requests left, not even virtual ones.
  */
-void server_loop()
+static void server_loop()
 {
 	while (handle_clients())
 	{
@@ -2612,7 +2612,7 @@ void server_loop()
  * If Remakefile is obsolete, perform a first run with it only, then reload
  * the rules, and perform a second with the original clients.
  */
-void server_mode(std::string const &remakefile, string_list const &targets)
+static void server_mode(std::string const &remakefile, string_list const &targets)
 {
 	load_dependencies();
 	load_rules(remakefile);
@@ -2656,7 +2656,7 @@ void server_mode(std::string const &remakefile, string_list const &targets)
  * Connect to the server @a socket_name, send a build request for @a targets,
  * and exit with the status returned by the server.
  */
-void client_mode(char *socket_name, string_list const &targets)
+static void client_mode(char *socket_name, string_list const &targets)
 {
 	if (false)
 	{
@@ -2728,7 +2728,7 @@ void client_mode(char *socket_name, string_list const &targets)
 /**
  * Display usage and exit with @a exit_status.
  */
-void usage(int exit_status)
+static void usage(int exit_status)
 {
 	std::cerr << "Usage: remake [options] [target] ...\n"
 		"Options\n"
