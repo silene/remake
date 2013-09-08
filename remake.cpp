@@ -313,10 +313,9 @@ Remakefile: Remakefile.in ./config.status
 
 \section sec-limitations Limitations
 
-- When the user calls <b>remake</b>, the current working directory should be
-  the one containing <b>.remake</b>. Rules are understood relatively to this
-  directory. If a rule script calls <b>remake</b>, the current working
-  directory should be the same as the one from the original <b>remake</b>.
+- If a rule script calls <b>remake</b>, the current working directory should
+  be the directory containing <b>Remakefile</b> (or the working directory
+  from the original <b>remake</b> if it was called with option <b>-f</b>).
 - Some cases of ill-formed rules are not caught by <b>remake</b> and can
   thus lead to unpredictable behaviors.
 
@@ -678,9 +677,20 @@ static bool show_targets = true;
  */
 static bool echo_scripts = false;
 
+/**
+ * Time at the start of the program.
+ */
 static time_t now = time(NULL);
 
+/**
+ * Directory with respect to which command-line names are relative.
+ */
 static std::string working_dir;
+
+/**
+ * Directory with respect to which targets are relative.
+ */
+static std::string prefix_dir;
 
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
@@ -809,16 +819,45 @@ static void init_working_dir()
 		exit(EXIT_FAILURE);
 	}
 	working_dir = buf;
+
+	for (size_t i = 0, l = working_dir.size(); i != l; ++i)
+	{
+		if (working_dir[i] == '\\') working_dir[i] = '/';
+	}
+	prefix_dir = working_dir;
 }
 
 /**
- * Normalize an absolute path with respect to the working directory.
- * Paths outside the working subtree are left unchanged.
+ * Initialize #prefix_dir and switch to it.
  */
-static std::string normalize_abs(std::string const &s)
+static void init_prefix_dir()
 {
-	size_t l = working_dir.length();
-	if (s.compare(0, l, working_dir)) return s;
+	for (;;)
+	{
+		struct stat s;
+		if (stat((prefix_dir + "/Remakefile").c_str(), &s) == 0)
+		{
+			chdir(prefix_dir.c_str());
+			return;
+		}
+		size_t pos = prefix_dir.find_last_of('/');
+		if (pos == std::string::npos)
+		{
+			std::cerr << "Failed to locate Remakefile in the current directory or one of its parents" << std::endl;
+			exit(EXIT_FAILURE);
+		}
+		prefix_dir.erase(pos);
+	}
+}
+
+/**
+ * Normalize an absolute path with respect to @a p.
+ * Paths outside the subtree are left unchanged.
+ */
+static std::string normalize_abs(std::string const &s, std::string const &p)
+{
+	size_t l = p.length();
+	if (s.compare(0, l, p)) return s;
 	size_t ll = s.length();
 	if (ll == l) return ".";
 	if (s[l] != '/')
@@ -832,19 +871,24 @@ static std::string normalize_abs(std::string const &s)
 }
 
 /**
- * Normalize a target name.
+ * Normalize path @a s (possibly relative to @a w) with respect to @a p.
+ *
+ * - If both @a p and @a w are empty, the function just removes ".", "..", "//".
+ * - If only @a p is empty, the function returns an absolute path.
  */
-static std::string normalize(std::string const &s)
+static std::string normalize(std::string const &s, std::string const &w, std::string const &p)
 {
 #ifdef WINDOWS
 	char const *delim = "/\\";
 #else
 	char delim = '/';
 #endif
-	size_t prev = 0, len = s.length();
 	size_t pos = s.find_first_of(delim);
-	if (pos == std::string::npos) return s;
+	if (pos == std::string::npos && w == p) return s;
 	bool absolute = pos == 0;
+	if (!absolute && w != p && !w.empty())
+		return normalize(w + '/' + s, w, p);
+	size_t prev = 0, len = s.length();
 	string_list l;
 	for (;;)
 	{
@@ -854,8 +898,8 @@ static std::string normalize(std::string const &s)
 			if (n == "..")
 			{
 				if (!l.empty()) l.pop_back();
-				else if (!absolute)
-					return normalize(working_dir + '/' + s);
+				else if (!absolute && !w.empty())
+					return normalize(w + '/' + s, w, p);
 			}
 			else if (n != ".")
 				l.push_back(n);
@@ -876,19 +920,19 @@ static std::string normalize(std::string const &s)
 		n.push_back('/');
 		n.append(*i);
 	}
-	if (absolute) return normalize_abs(n);
+	if (absolute && !p.empty()) return normalize_abs(n, p);
 	return n;
 }
 
 /**
  * Normalize the content of a list of targets.
  */
-static void normalize_list(string_list &l)
+static void normalize_list(string_list &l, std::string const &w, std::string const &p)
 {
 	for (string_list::iterator i = l.begin(),
 	     i_end = l.end(); i != i_end; ++i)
 	{
-		*i = normalize(*i);
+		*i = normalize(*i, w, p);
 	}
 }
 
@@ -1529,7 +1573,7 @@ static void load_rule(std::istream &in, std::string const &first)
 	else if (targets.empty()) goto error;
 	else DEBUG << "actual target: " << targets.front() << std::endl;
 	bool generic = false;
-	normalize_list(targets);
+	normalize_list(targets, "", "");
 	for (string_list::const_iterator i = targets.begin(),
 	     i_end = targets.end(); i != i_end; ++i)
 	{
@@ -1567,13 +1611,13 @@ static void load_rule(std::istream &in, std::string const &first)
 		}
 
 		if (!read_words(in, v)) goto error;
-		normalize_list(v);
+		normalize_list(v, "", "");
 		rule.deps.swap(v);
 
 		if (expect_token(in, Pipe))
 		{
 			if (!read_words(in, v)) goto error;
-			normalize_list(v);
+			normalize_list(v, "", "");
 			rule.wdeps.swap(v);
 		}
 	}
@@ -2758,7 +2802,7 @@ int main(int argc, char *argv[])
 {
 	init_working_dir();
 
-	std::string remakefile = "Remakefile";
+	std::string remakefile;
 	string_list targets;
 	bool indirect_targets = false;
 
@@ -2789,7 +2833,7 @@ int main(int argc, char *argv[])
 		else
 		{
 			if (arg[0] == '-') usage(EXIT_FAILURE);
-			targets.push_back(normalize(arg));
+			targets.push_back(normalize(arg, working_dir, working_dir));
 			DEBUG << "New target: " << arg << '\n';
 		}
 	}
@@ -2812,7 +2856,7 @@ int main(int argc, char *argv[])
 			for (string_set::const_iterator k = dep.deps.begin(),
 			     k_end = dep.deps.end(); k != k_end; ++k)
 			{
-				targets.push_back(normalize(*k));
+				targets.push_back(normalize(*k, working_dir, working_dir));
 			}
 		}
 		dependencies.clear();
@@ -2831,6 +2875,12 @@ int main(int argc, char *argv[])
 	if (char *sn = getenv("REMAKE_SOCKET")) client_mode(sn, targets);
 
 	// Otherwise run as server.
+	if (remakefile.empty())
+	{
+		remakefile = "Remakefile";
+		init_prefix_dir();
+	}
+	normalize_list(targets, working_dir, prefix_dir);
 	server_mode(remakefile, targets);
 }
 

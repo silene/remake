@@ -301,10 +301,9 @@ Differences with <b>redo</b>:
 Limitations
 -----------
 
-- When the user calls <b>remake</b>, the current working directory should be
-  the one containing <b>.remake</b>. Rules are understood relatively to this
-  directory. If a rule script calls <b>remake</b>, the current working
-  directory should be the same as the one from the original <b>remake</b>.
+- If a rule script calls <b>remake</b>, the current working directory should
+  be the directory containing <b>Remakefile</b> (or the working directory
+  from the original <b>remake</b> if it was called with option <b>-f</b>).
 - Some cases of ill-formed rules are not caught by <b>remake</b> and can
   thus lead to unpredictable behaviors.
 
