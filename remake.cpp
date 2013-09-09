@@ -2021,21 +2021,23 @@ static bool still_need_rebuild(std::string const &target)
  */
 static void complete_job(int job_id, bool success)
 {
-	DEBUG_open << "Completing job " << job_id << "... ";
+	DEBUG << "Completing job " << job_id << '\n';
 	job_map::iterator i = jobs.find(job_id);
 	assert(i != jobs.end());
 	string_list const &targets = i->second.rule.targets;
 	if (success)
 	{
+		if (show_targets) std::cout << "Finished";
 		for (string_list::const_iterator j = targets.begin(),
 		     j_end = targets.end(); j != j_end; ++j)
 		{
 			update_status(*j);
+			if (show_targets) std::cout << ' ' << *j;
 		}
+		if (show_targets) std::cout << std::endl;
 	}
 	else
 	{
-		DEBUG_close << "failed\n";
 		std::cerr << "Failed to build";
 		for (string_list::const_iterator j = targets.begin(),
 		     j_end = targets.end(); j != j_end; ++j)
@@ -2137,25 +2139,17 @@ static std::string prepare_script(job_t const &job)
  */
 static status_e run_script(int job_id, job_t const &job)
 {
-	if (show_targets)
-	{
-		std::cout << "Building";
-		for (string_list::const_iterator i = job.rule.targets.begin(),
-		     i_end = job.rule.targets.end(); i != i_end; ++i)
-		{
-			std::cout << ' ' << *i;
-		}
-		std::cout << std::endl;
-	}
-
 	ref_ptr<dependency_t> dep;
 	dep->targets = job.rule.targets;
 	dep->deps.insert(job.rule.deps.begin(), job.rule.deps.end());
+	if (show_targets) std::cout << "Building";
 	for (string_list::const_iterator i = job.rule.targets.begin(),
 	     i_end = job.rule.targets.end(); i != i_end; ++i)
 	{
 		dependencies[*i] = dep;
+		if (show_targets) std::cout << ' ' << *i;
 	}
+	if (show_targets) std::cout << std::endl;
 
 	std::string script = prepare_script(job);
 
