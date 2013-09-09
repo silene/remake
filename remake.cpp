@@ -2106,7 +2106,7 @@ static std::string prepare_script(rule_t const &rule)
 /**
  * Execute the script from @a rule.
  */
-static bool run_script(int job_id, rule_t const &rule)
+static status_e run_script(int job_id, rule_t const &rule)
 {
 	if (show_targets)
 	{
@@ -2135,12 +2135,19 @@ static bool run_script(int job_id, rule_t const &rule)
 	std::string job_id_ = job_id_buf.str();
 
 	DEBUG_open << "Starting script for job " << job_id << "... ";
+	if (script.empty())
+	{
+		DEBUG_close << "no script\n";
+		complete_job(job_id, true);
+		return Remade;
+	}
+
 	if (false)
 	{
 		error:
 		DEBUG_close << "failed\n";
 		complete_job(job_id, false);
-		return false;
+		return Failed;
 	}
 
 #ifdef WINDOWS
@@ -2181,7 +2188,7 @@ static bool run_script(int job_id, rule_t const &rule)
 	CloseHandle(pfd[1]);
 	++running_jobs;
 	job_pids[pi.hProcess] = job_id;
-	return true;
+	return Running;
 #else
 	int pfd[2];
 	if (false)
@@ -2205,7 +2212,7 @@ static bool run_script(int job_id, rule_t const &rule)
 		close(pfd[1]);
 		++running_jobs;
 		job_pids[pid] = job_id;
-		return true;
+		return Running;
 	}
 	// Child process starts here. Notice the use of vfork above.
 	char const *argv[5] = { "sh", "-e", "-s", NULL, NULL };
@@ -2227,7 +2234,7 @@ static bool run_script(int job_id, rule_t const &rule)
  * If the rule has dependencies, create a new client to build them just
  * before @a current, and change @a current so that it points to it.
  */
-static bool start(std::string const &target, client_list::iterator &current)
+static status_e start(std::string const &target, client_list::iterator &current)
 {
 	DEBUG_open << "Starting job " << job_counter << " for " << target << "... ";
 	rule_t rule = find_rule(target);
@@ -2236,7 +2243,7 @@ static bool start(std::string const &target, client_list::iterator &current)
 		status[target].status = Failed;
 		DEBUG_close << "failed\n";
 		std::cerr << "No rule for building " << target << std::endl;
-		return false;
+		return Failed;
 	}
 	for (string_list::const_iterator i = rule.targets.begin(),
 	     i_end = rule.targets.end(); i != i_end; ++i)
@@ -2253,7 +2260,7 @@ static bool start(std::string const &target, client_list::iterator &current)
 		current->pending.insert(current->pending.end(),
 			rule.wdeps.begin(), rule.wdeps.end());
 		current->delayed = new rule_t(rule);
-		return true;
+		return Recheck;
 	}
 	return run_script(job_id, rule);
 }
@@ -2377,13 +2384,27 @@ static bool handle_clients()
 			case Recheck:
 			case Todo:
 				client_list::iterator j = i;
-				if (!start(target, i)) goto pending_failed;
-				j->running.insert(target);
-				if (!has_free_slots()) return true;
-				// Job start might insert a dependency client.
-				i_next = i;
-				++i_next;
-				break;
+				switch (start(target, i))
+				{
+				case Failed:
+					goto pending_failed;
+				case Running:
+					// A shell was started, check for free slots.
+					j->running.insert(target);
+					if (!has_free_slots()) return true;
+					break;
+				case Recheck:
+					// Switch to the dependency client that was inserted.
+					j->running.insert(target);
+					i_next = i;
+					++i_next;
+					break;
+				case Remade:
+					// Nothing to run.
+					break;
+				default:
+					assert(false);
+				}
 			}
 		}
 
