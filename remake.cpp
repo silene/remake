@@ -2217,12 +2217,12 @@ static status_e run_script(int job_id, rule_t const &rule)
 	// Child process starts here. Notice the use of vfork above.
 	char const *argv[5] = { "sh", "-e", "-s", NULL, NULL };
 	if (echo_scripts) argv[3] = "-v";
+	close(pfd[1]);
 	if (pfd[0] != 0)
 	{
 		dup2(pfd[0], 0);
 		close(pfd[0]);
 	}
-	close(pfd[1]);
 	execve("/bin/sh", (char **)argv, environ);
 	_exit(EXIT_FAILURE);
 #endif
