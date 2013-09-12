@@ -2318,25 +2318,24 @@ static bool has_free_slots()
  * @return true if some child processes are still running.
  *
  * @post If there are pending requests, at least one child process is running.
+ *
+ * @invariant New free slots cannot appear during a run, since the only way to
+ *            decrease #running_jobs is #finalize_job and the only way to
+ *            increase #waiting_jobs is #accept_client. None of these functions
+ *            are called during a run. So breaking out as soon as there no free
+ *            slots left is fine.
  */
 static bool handle_clients()
 {
 	DEBUG_open << "Handling client requests... ";
 	restart:
+	bool need_restart = false;
 
 	for (client_list::iterator i = clients.begin(), i_next = i,
 	     i_end = clients.end(); i != i_end && has_free_slots(); i = i_next)
 	{
 		++i_next;
 		DEBUG_open << "Handling client from job " << i->job_id << "... ";
-		if (false)
-		{
-			failed:
-			complete_request(*i, false);
-			clients.erase(i);
-			DEBUG_close << "failed\n";
-			continue;
-		}
 
 		// Remove running targets that have finished.
 		for (string_set::iterator j = i->running.begin(), j_next = j,
@@ -2350,8 +2349,8 @@ static bool handle_clients()
 			case Running:
 				break;
 			case Failed:
-				if (!keep_going) goto failed;
 				i->failed = true;
+				if (!keep_going) goto complete;
 				// no break
 			case Uptodate:
 			case Remade:
@@ -2375,8 +2374,8 @@ static bool handle_clients()
 				break;
 			case Failed:
 				pending_failed:
-				if (!keep_going) goto failed;
 				i->failed = true;
+				if (!keep_going) goto complete;
 				// no break
 			case Uptodate:
 			case Remade:
@@ -2396,11 +2395,11 @@ static bool handle_clients()
 				case Recheck:
 					// Switch to the dependency client that was inserted.
 					j->running.insert(target);
-					i_next = i;
-					++i_next;
+					i_next = j;
 					break;
 				case Remade:
 					// Nothing to run.
+					need_restart = true;
 					break;
 				default:
 					assert(false);
@@ -2410,17 +2409,19 @@ static bool handle_clients()
 
 		// Try to complete the request.
 		// (This might start a new job if it was a dependency client.)
-		if (i->running.empty())
+		if (i->running.empty() || i->failed)
 		{
-			if (i->failed) goto failed;
-			complete_request(*i, true);
+			complete:
+			complete_request(*i, !i->failed);
+			DEBUG_close << (i->failed ? "failed\n" : "finished\n");
 			clients.erase(i);
-			DEBUG_close << "finished\n";
+			need_restart = true;
 		}
 	}
 
 	if (running_jobs != waiting_jobs) return true;
 	if (running_jobs == 0 && clients.empty()) return false;
+	if (need_restart) goto restart;
 
 	// There is a circular dependency.
 	// Try to break it by completing one of the requests.
