@@ -2827,6 +2827,7 @@ int main(int argc, char *argv[])
 
 	std::string remakefile;
 	string_list targets;
+	bool literal_targets = false;
 	bool indirect_targets = false;
 
 	// Parse command-line arguments.
@@ -2834,6 +2835,7 @@ int main(int argc, char *argv[])
 	{
 		std::string arg = argv[i];
 		if (arg.empty()) usage(EXIT_FAILURE);
+		if (literal_targets) goto new_target;
 		if (arg == "-h" || arg == "--help") usage(EXIT_SUCCESS);
 		if (arg == "-d")
 			if (echo_scripts) debug.active = true;
@@ -2849,6 +2851,8 @@ int main(int argc, char *argv[])
 			if (++i == argc) usage(EXIT_FAILURE);
 			remakefile = argv[i];
 		}
+		else if (arg == "--")
+			literal_targets = true;
 		else if (arg.compare(0, 2, "-j") == 0)
 			max_active_jobs = atoi(arg.c_str() + 2);
 		else if (arg.compare(0, 7, "--jobs=") == 0)
@@ -2856,6 +2860,7 @@ int main(int argc, char *argv[])
 		else
 		{
 			if (arg[0] == '-') usage(EXIT_FAILURE);
+			new_target:
 			targets.push_back(normalize(arg, working_dir, working_dir));
 			DEBUG << "New target: " << arg << '\n';
 		}
