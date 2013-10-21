@@ -172,6 +172,17 @@ computation of their dynamic dependencies does.
 	parser.c parser.h: parser.y
 		yacc -d -o parser.c parser.y
 
+### Special variables
+
+Variable <tt>.OPTIONS</tt> is handled specially. Its content enables some
+features of <b>remake</b> that are not enabled by default.
+
+- <tt>variable-propagation</tt>: When a variable is set in the prerequisite
+  part of a rule, it is propagated to the rules of all the targets this rule
+  depends on. This option also enables variables to be set on the command
+  line. Note that, as in <b>make</b>, this features introduces non-determinism:
+  the content of some variables will depend on the build order.
+
 Semantics
 ---------
 
@@ -280,6 +291,9 @@ Differences with <b>make</b>:
   select one for which it could satisfy the dependencies.
 - Variables and built-in functions are expanded as they are encountered
   during <b>Remakefile</b> parsing.
+- Target-specific variables are not propagated, unless specifically enabled,
+  since this causes non-deterministic builds. This is the same for variables
+  set on the command line.
 
 Differences with <b>redo</b>:
 
@@ -304,6 +318,8 @@ Limitations
 - If a rule script calls <b>remake</b>, the current working directory should
   be the directory containing <b>Remakefile</b> (or the working directory
   from the original <b>remake</b> if it was called with option <b>-f</b>).
+- As with <b>make</b>, variables passed on the command line should keep
+  the same values, to ensure deterministic builds.
 - Some cases of ill-formed rules are not caught by <b>remake</b> and can
   thus lead to unpredictable behaviors.
 

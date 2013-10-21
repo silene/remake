@@ -184,6 +184,17 @@ parser.c parser.h: parser.y
 	yacc -d -o parser.c parser.y
 @endverbatim
 
+\subsection sec-special-var Special variables
+
+Variable <tt>.OPTIONS</tt> is handled specially. Its content enables some
+features of <b>remake</b> that are not enabled by default.
+
+- <tt>variable-propagation</tt>: When a variable is set in the prerequisite
+  part of a rule, it is propagated to the rules of all the targets this rule
+  depends on. This option also enables variables to be set on the command
+  line. Note that, as in <b>make</b>, this features introduces non-determinism:
+  the content of some variables will depend on the build order.
+
 \section sec-semantics Semantics
 
 \subsection src-obsolete When are targets obsolete?
@@ -293,6 +304,9 @@ Differences with <b>make</b>:
   select one for which it could satisfy the dependencies.
 - Variables and built-in functions are expanded as they are encountered
   during <b>Remakefile</b> parsing.
+- Target-specific variables are not propagated, unless specifically enabled,
+  since this causes non-deterministic builds. This is the same for variables
+  set on the command line.
 
 Differences with <b>redo</b>:
 
@@ -316,6 +330,8 @@ Remakefile: Remakefile.in ./config.status
 - If a rule script calls <b>remake</b>, the current working directory should
   be the directory containing <b>Remakefile</b> (or the working directory
   from the original <b>remake</b> if it was called with option <b>-f</b>).
+- As with <b>make</b>, variables passed on the command line should keep
+  the same values, to ensure deterministic builds.
 - Some cases of ill-formed rules are not caught by <b>remake</b> and can
   thus lead to unpredictable behaviors.
 
@@ -568,6 +584,7 @@ struct client_t
 	bool failed;         ///< Whether some targets failed in mode -k.
 	string_list pending; ///< Targets not yet started.
 	string_set running;  ///< Targets being built.
+	variable_map vars;   ///< Variables set on request.
 	bool delayed;        ///< Whether it is a dependency client and a script has to be started on request completion.
 	client_t(): socket(INVALID_SOCKET), job_id(-1), failed(false), delayed(false) {}
 };
@@ -576,6 +593,7 @@ typedef std::list<client_t> client_list;
 
 /**
  * Map from variable names to their content.
+ * Initialized with the values passed on the command line.
  */
 static variable_map variables;
 
@@ -700,6 +718,11 @@ static std::string working_dir;
  * Directory with respect to which targets are relative.
  */
 static std::string prefix_dir;
+
+/**
+ * Whether target-specific variables are propagated to prerequisites.
+ */
+static bool propagate_vars = false;
 
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
@@ -1674,6 +1697,8 @@ static void load_rules(std::string const &remakefile)
 	}
 	skip_empty(in);
 
+	string_list options;
+
 	// Read rules
 	while (in.good())
 	{
@@ -1694,7 +1719,8 @@ static void load_rules(std::string const &remakefile)
 				DEBUG << "Assignment to variable " << name << std::endl;
 				string_list value;
 				if (!read_words(in, value)) goto error;
-				string_list &dest = variables[name];
+				string_list &dest =
+					*(name == ".OPTIONS" ? &options : &variables[name]);
 				if (tok == Equal) dest.swap(value);
 				else dest.splice(dest.end(), value);
 				if (!skip_eol(in, true)) goto error;
@@ -1702,6 +1728,18 @@ static void load_rules(std::string const &remakefile)
 			else load_rule(in, name);
 		}
 		else load_rule(in, std::string());
+	}
+
+	// Set actual options.
+	for (string_list::const_iterator i = options.begin(),
+	     i_end = options.end(); i != i_end; ++i)
+	{
+		if (*i == "variable-propagation") propagate_vars = true;
+		else
+		{
+			std::cerr << "Failed to load rules: unrecognized option" << std::endl;
+			exit(EXIT_FAILURE);
+		}
 	}
 }
 
@@ -2222,6 +2260,7 @@ static status_e run_script(int job_id, job_t const &job)
 /**
  * Create a job for @a target according to the loaded rules.
  * Mark all the targets from the rule as running and reset their dependencies.
+ * Inherit variables from @a current, if enabled.
  * If the rule has dependencies, create a new client to build them just
  * before @a current, and change @a current so that it points to it.
  */
@@ -2243,15 +2282,22 @@ static status_e start(std::string const &target, client_list::iterator &current)
 	{
 		status[*i].status = Running;
 	}
+	if (propagate_vars) job.vars = current->vars;
 	for (assign_map::const_iterator i = job.rule.assigns.begin(),
 	     i_end = job.rule.assigns.end(); i != i_end; ++i)
 	{
-		string_list &v = job.vars[i->first];
+		std::pair<variable_map::iterator, bool> k =
+			job.vars.insert(std::make_pair(i->first, string_list()));
+		string_list &v = k.first->second;
 		if (i->second.append)
 		{
-			variable_map::const_iterator j = variables.find(i->first);
-			if (j != variables.end()) v = j->second;
+			if (k.second)
+			{
+				variable_map::const_iterator j = variables.find(i->first);
+				if (j != variables.end()) v = j->second;
+			}
 		}
+		else if (!k.second) v.clear();
 		v.insert(v.end(), i->second.value.begin(), i->second.value.end());
 	}
 	if (!job.rule.deps.empty() || !job.rule.wdeps.empty())
@@ -2261,6 +2307,7 @@ static status_e start(std::string const &target, client_list::iterator &current)
 		current->pending = job.rule.deps;
 		current->pending.insert(current->pending.end(),
 			job.rule.wdeps.begin(), job.rule.wdeps.end());
+		if (propagate_vars) current->vars = job.vars;
 		current->delayed = true;
 		return Recheck;
 	}
@@ -2583,9 +2630,12 @@ static void accept_client()
 	job_map::const_iterator i = jobs.find(job_id);
 	if (i == jobs.end()) goto error;
 	DEBUG << "receiving request from job " << job_id << std::endl;
+	if (propagate_vars) proc->vars = i->second.vars;
 
-	// Parse the targets and mark them as dependencies from the job targets.
+	// Parse the targets and the variable assignments.
+	// Mark the targets as dependencies of the job targets.
 	dependency_t &dep = *dependencies[i->second.rule.targets.front()];
+	string_list *last_var = NULL;
 	char const *p = &buf[0] + sizeof(int);
 	while (true)
 	{
@@ -2593,13 +2643,44 @@ static void accept_client()
 		if (len == 0)
 		{
 			++waiting_jobs;
-			return;
+			break;
 		}
-		std::string target(p, p + len);
-		DEBUG << "adding dependency " << target << " to job\n";
-		proc->pending.push_back(target);
-		dep.deps.insert(target);
+		switch (*p)
+		{
+		case 'T':
+		{
+			if (len == 1) goto error;
+			std::string target(p + 1, p + len);
+			DEBUG << "adding dependency " << target << " to job\n";
+			proc->pending.push_back(target);
+			dep.deps.insert(target);
+			break;
+		}
+		case 'V':
+		{
+			if (len == 1) goto error;
+			std::string var(p + 1, p + len);
+			DEBUG << "adding variable " << var << " to job\n";
+			last_var = &proc->vars[var];
+			last_var->clear();
+			break;
+		}
+		case 'W':
+		{
+			if (!last_var) goto error;
+			last_var->push_back(std::string(p + 1, p + len));
+			break;
+		}
+		default:
+			goto error;
+		}
 		p += len + 1;
+	}
+
+	if (!propagate_vars && !proc->vars.empty())
+	{
+		std::cerr << "Assignments are ignored unless 'variable-propagation' is enabled" << std::endl;
+		proc->vars.clear();
 	}
 }
 
@@ -2723,8 +2804,8 @@ static void server_mode(std::string const &remakefile, string_list const &target
  */
 
 /**
- * Connect to the server @a socket_name, send a build request for @a targets,
- * and exit with the status returned by the server.
+ * Connect to the server @a socket_name, send a request for building @a targets
+ * with some @a variables, and exit with the status returned by the server.
  */
 static void client_mode(char *socket_name, string_list const &targets)
 {
@@ -2774,10 +2855,30 @@ static void client_mode(char *socket_name, string_list const &targets)
 	for (string_list::const_iterator i = targets.begin(),
 	     i_end = targets.end(); i != i_end; ++i)
 	{
-		DEBUG_open << "Sending " << *i << "... ";
-		ssize_t len = i->length() + 1;
-		if (send(socket_fd, i->c_str(), len, MSG_NOSIGNAL) != len)
+		DEBUG_open << "Sending target " << *i << "... ";
+		std::string s = 'T' + *i;
+		ssize_t len = s.length() + 1;
+		if (send(socket_fd, s.c_str(), len, MSG_NOSIGNAL) != len)
 			goto error;
+	}
+
+	// Send variables.
+	for (variable_map::const_iterator i = variables.begin(),
+	     i_end = variables.end(); i != i_end; ++i)
+	{
+		DEBUG_open << "Sending variable " << i->first << "... ";
+		std::string s = 'V' + i->first;
+		ssize_t len = s.length() + 1;
+		if (send(socket_fd, s.c_str(), len, MSG_NOSIGNAL) != len)
+			goto error;
+		for (string_list::const_iterator j = i->second.begin(),
+		     j_end = i->second.end(); j != j_end; ++j)
+		{
+			std::string s = 'W' + *j;
+			len = s.length() + 1;
+			if (send(socket_fd, s.c_str(), len, MSG_NOSIGNAL) != len)
+				goto error;
+		}
 	}
 
 	// Send terminating nul and wait for reply.
@@ -2863,6 +2964,14 @@ int main(int argc, char *argv[])
 		else
 		{
 			if (arg[0] == '-') usage(EXIT_FAILURE);
+			if (arg.find('=') != std::string::npos)
+			{
+				std::istringstream in(arg);
+				std::string name = read_word(in);
+				if (name.empty() || !expect_token(in, Equal)) usage(EXIT_FAILURE);
+				read_words(in, variables[name]);
+				continue;
+			}
 			new_target:
 			targets.push_back(normalize(arg, working_dir, working_dir));
 			DEBUG << "New target: " << arg << '\n';
