@@ -511,12 +511,11 @@ typedef std::map<std::string, status_t> status_map;
  */
 struct assign_t
 {
-	std::string name;
 	bool append;
 	string_list value;
 };
 
-typedef std::list<assign_t> assign_list;
+typedef std::map<std::string, assign_t> assign_map;
 
 /**
  * A rule loaded from Remakefile.
@@ -526,16 +525,26 @@ struct rule_t
 	string_list targets; ///< Files produced by this rule.
 	string_list deps;    ///< Dependencies used for an implicit call to remake at the start of the script.
 	string_list wdeps;   ///< Like #deps, except that they are not registered as dependencies.
-	assign_list vars;    ///< Values of variables.
+	assign_map assigns;  ///< Assignment of variables.
 	std::string script;  ///< Shell script for building the targets.
-	std::string stem;    ///< String used to instantiate a generic rule.
 };
 
 typedef std::list<rule_t> rule_list;
 
 typedef std::map<std::string, ref_ptr<rule_t> > rule_map;
 
-typedef std::map<int, string_list> job_targets_map;
+/**
+ * A job created from a set of rules.
+ */
+
+struct job_t
+{
+	rule_t rule;       ///< Original rule.
+	std::string stem;  ///< Pattern used to instantiate the generic rule, if any.
+	variable_map vars; ///< Values of local variables.
+};
+
+typedef std::map<int, job_t> job_map;
 
 typedef std::map<pid_t, int> pid_job_map;
 
@@ -559,8 +568,8 @@ struct client_t
 	bool failed;         ///< Whether some targets failed in mode -k.
 	string_list pending; ///< Targets not yet started.
 	string_set running;  ///< Targets being built.
-	rule_t *delayed;     ///< Rule that implicitly created a dependency client, and which script has to be started on request completion.
-	client_t(): socket(INVALID_SOCKET), job_id(-1), failed(false), delayed(NULL) {}
+	bool delayed;        ///< Whether it is a dependency client and a script has to be started on request completion.
+	client_t(): socket(INVALID_SOCKET), job_id(-1), failed(false), delayed(false) {}
 };
 
 typedef std::list<client_t> client_list;
@@ -591,9 +600,9 @@ static rule_list generic_rules;
 static rule_map specific_rules;
 
 /**
- * Map from jobs to targets being built.
+ * Map of jobs being built.
  */
-static job_targets_map job_targets;
+static job_map jobs;
 
 /**
  * Map from jobs to shell pids.
@@ -1118,67 +1127,37 @@ struct generator
 struct variable_generator: generator
 {
 	std::string name;
-	string_list::const_iterator cur1, end1;
-	assign_list::const_iterator cur2, end2;
-	variable_generator(std::string const &, assign_list const *);
+	string_list::const_iterator vcur, vend;
+	variable_generator(std::string const &, variable_map const *);
 	input_status next(std::string &);
 };
 
 variable_generator::variable_generator(std::string const &n,
-	assign_list const *local_variables): name(n)
+	variable_map const *local_variables): name(n)
 {
-	bool append = true;
 	if (local_variables)
 	{
-		// Set cur2 to the last variable overwriter, if any.
-		cur2 = local_variables->begin();
-		end2 = local_variables->end();
-		for (assign_list::const_iterator i = cur2; i != end2; ++i)
+		variable_map::const_iterator i = local_variables->find(name);
+		if (i != local_variables->end())
 		{
-			if (i->name == name && !i->append)
-			{
-				append = false;
-				cur2 = i;
-			}
+			vcur = i->second.begin();
+			vend = i->second.end();
+			return;
 		}
 	}
-	else
-	{
-		static assign_list dummy;
-		cur2 = dummy.begin();
-		end2 = dummy.end();
-	}
-	static string_list dummy;
-	cur1 = dummy.begin();
-	end1 = dummy.end();
-	if (append)
-	{
-		variable_map::const_iterator i = variables.find(name);
-		if (i == variables.end()) return;
-		cur1 = i->second.begin();
-		end1 = i->second.end();
-	}
+	variable_map::const_iterator i = variables.find(name);
+	if (i == variables.end()) return;
+	vcur = i->second.begin();
+	vend = i->second.end();
 }
 
 input_status variable_generator::next(std::string &res)
 {
-	restart:
-	if (cur1 != end1)
+	if (vcur != vend)
 	{
-		res = *cur1;
-		++cur1;
+		res = *vcur;
+		++vcur;
 		return Success;
-	}
-	while (cur2 != end2)
-	{
-		if (cur2->name == name)
-		{
-			cur1 = cur2->value.begin();
-			end1 = cur2->value.end();
-			++cur2;
-			goto restart;
-		}
-		++cur2;
 	}
 	return Eof;
 }
@@ -1190,9 +1169,9 @@ struct input_generator
 {
 	std::istream &in;
 	generator *nested;
-	assign_list const *local_variables;
+	variable_map const *local_variables;
 	bool earliest_exit, done;
-	input_generator(std::istream &i, assign_list const *lv, bool e = false)
+	input_generator(std::istream &i, variable_map const *lv, bool e = false)
 		: in(i), nested(NULL), local_variables(lv), earliest_exit(e), done(false) {}
 	input_status next(std::string &);
 	~input_generator() { assert(!nested); }
@@ -1466,6 +1445,8 @@ static void save_dependencies()
 
 /** @} */
 
+static void merge_rule(rule_t &dest, rule_t const &src);
+
 /**
  * @defgroup parser Rule parser
  *
@@ -1502,9 +1483,7 @@ static void register_transparent_rule(rule_t const &rule, string_list const &tar
 			exit(EXIT_FAILURE);
 		}
 		assert(r->targets.size() == 1 && r->targets.front() == *i);
-		r->deps.insert(r->deps.end(), rule.deps.begin(), rule.deps.end());
-		r->wdeps.insert(r->wdeps.end(), rule.wdeps.begin(), rule.wdeps.end());
-		r->vars.insert(r->vars.end(), rule.vars.begin(), rule.vars.end());
+		merge_rule(*r, rule);
 	}
 
 	for (string_list::const_iterator i = targets.begin(),
@@ -1599,10 +1578,8 @@ static void load_rule(std::istream &in, std::string const &first)
 			std::string d = read_word(in);
 			if (int tok = expect_token(in, Equal | Plusequal))
 			{
-				rule.vars.push_back(assign_t());
 				if (!read_words(in, v)) goto error;
-				assign_t &a = rule.vars.back();
-				a.name = d;
+				assign_t &a = rule.assigns[d];
 				a.append = tok == Plusequal;
 				a.value.swap(v);
 				assignment = true;
@@ -1736,6 +1713,26 @@ static void load_rules(std::string const &remakefile)
  * @{
  */
 
+static void merge_rule(rule_t &dest, rule_t const &src)
+{
+	dest.deps.insert(dest.deps.end(), src.deps.begin(), src.deps.end());
+	dest.wdeps.insert(dest.wdeps.end(), src.wdeps.begin(), src.wdeps.end());
+	for (assign_map::const_iterator i = src.assigns.begin(),
+	     i_end = src.assigns.end(); i != i_end; ++i)
+	{
+		if (!i->second.append)
+		{
+			new_assign:
+			dest.assigns[i->first] = i->second;
+			continue;
+		}
+		assign_map::iterator j = dest.assigns.find(i->first);
+		if (j == dest.assigns.end()) goto new_assign;
+		j->second.value.insert(j->second.value.end(),
+			i->second.value.begin(), i->second.value.end());
+	}
+}
+
 /**
  * Substitute a pattern into a list of strings.
  */
@@ -1755,10 +1752,9 @@ static void substitute_pattern(std::string const &pat, string_list const &src, s
  * - the one leading to shorter matches has priority,
  * - among equivalent rules, the earliest one has priority.
  */
-static rule_t find_generic_rule(std::string const &target)
+static void find_generic_rule(job_t &job, std::string const &target)
 {
 	size_t tlen = target.length(), plen = tlen + 1;
-	rule_t rule;
 	for (rule_list::const_iterator i = generic_rules.begin(),
 	     i_end = generic_rules.end(); i != i_end; ++i)
 	{
@@ -1775,16 +1771,15 @@ static rule_t find_generic_rule(std::string const &target)
 			    j->compare(pos + 1, len2, target, tlen - len2, len2))
 				continue;
 			plen = tlen - (len - 1);
-			rule = rule_t();
-			rule.stem = target.substr(pos, plen);
-			rule.script = i->script;
-			substitute_pattern(rule.stem, i->targets, rule.targets);
-			substitute_pattern(rule.stem, i->deps, rule.deps);
-			substitute_pattern(rule.stem, i->wdeps, rule.wdeps);
+			job.stem = target.substr(pos, plen);
+			job.rule = rule_t();
+			job.rule.script = i->script;
+			substitute_pattern(job.stem, i->targets, job.rule.targets);
+			substitute_pattern(job.stem, i->deps, job.rule.deps);
+			substitute_pattern(job.stem, i->wdeps, job.rule.wdeps);
 			break;
 		}
 	}
-	return rule;
 }
 
 /**
@@ -1792,47 +1787,43 @@ static rule_t find_generic_rule(std::string const &target)
  * If there is both a specific rule with an empty script and a generic rule, the
  * generic one is returned after adding the dependencies of the specific one.
  */
-static rule_t find_rule(std::string const &target)
+static void find_rule(job_t &job, std::string const &target)
 {
 	rule_map::const_iterator i = specific_rules.find(target),
 		i_end = specific_rules.end();
 	// If there is a specific rule with a script, return it.
-	if (i != i_end && !i->second->script.empty()) return *i->second;
-	rule_t grule = find_generic_rule(target);
-	// If there is no generic rule, return the specific rule (no script), if any.
-	if (grule.targets.empty())
+	if (i != i_end && !i->second->script.empty())
 	{
-		if (i != i_end) return *i->second;
-		return grule;
+		job.rule = *i->second;
+		return;
+	}
+	find_generic_rule(job, target);
+	// If there is no generic rule, return the specific rule (no script), if any.
+	if (job.rule.targets.empty())
+	{
+		if (i != i_end)
+		{
+			job.rule = *i->second;
+			return;
+		}
 	}
 	// Optimize the lookup when there is only one target (already looked up).
-	if (grule.targets.size() == 1)
+	if (job.rule.targets.size() == 1)
 	{
-		if (i == i_end) return grule;
-		grule.deps.insert(grule.deps.end(),
-			i->second->deps.begin(), i->second->deps.end());
-		grule.wdeps.insert(grule.wdeps.end(),
-			i->second->wdeps.begin(), i->second->wdeps.end());
-		grule.vars.insert(grule.vars.end(),
-			i->second->vars.begin(), i->second->vars.end());
-		return grule;
+		if (i == i_end) return;
+		merge_rule(job.rule, *i->second);
+		return;
 	}
 	// Add the dependencies of the specific rules of every target to the
 	// generic rule. If any of those rules has a nonempty script, error out.
-	for (string_list::const_iterator j = grule.targets.begin(),
-	     j_end = grule.targets.end(); j != j_end; ++j)
+	for (string_list::const_iterator j = job.rule.targets.begin(),
+	     j_end = job.rule.targets.end(); j != j_end; ++j)
 	{
 		i = specific_rules.find(*j);
 		if (i == i_end) continue;
-		if (!i->second->script.empty()) return rule_t();
-		grule.deps.insert(grule.deps.end(),
-			i->second->deps.begin(), i->second->deps.end());
-		grule.wdeps.insert(grule.wdeps.end(),
-			i->second->wdeps.begin(), i->second->wdeps.end());
-		grule.vars.insert(grule.vars.end(),
-			i->second->vars.begin(), i->second->vars.end());
+		if (!i->second->script.empty()) return;
+		merge_rule(job.rule, *i->second);
 	}
-	return grule;
 }
 
 /** @} */
@@ -1993,9 +1984,9 @@ static bool still_need_rebuild(std::string const &target)
 static void complete_job(int job_id, bool success)
 {
 	DEBUG_open << "Completing job " << job_id << "... ";
-	job_targets_map::iterator i = job_targets.find(job_id);
-	assert(i != job_targets.end());
-	string_list const &targets = i->second;
+	job_map::iterator i = jobs.find(job_id);
+	assert(i != jobs.end());
+	string_list const &targets = i->second.rule.targets;
 	if (success)
 	{
 		for (string_list::const_iterator j = targets.begin(),
@@ -2017,15 +2008,15 @@ static void complete_job(int job_id, bool success)
 		}
 		std::cerr << std::endl;
 	}
-	job_targets.erase(i);
+	jobs.erase(i);
 }
 
 /**
  * Return the script obtained by substituting variables.
  */
-static std::string prepare_script(rule_t const &rule)
+static std::string prepare_script(job_t const &job)
 {
-	std::string const &s = rule.script;
+	std::string const &s = job.rule.script;
 	std::istringstream in(s);
 	std::ostringstream out;
 	size_t len = s.size();
@@ -2044,15 +2035,15 @@ static std::string prepare_script(rule_t const &rule)
 			in.seekg(p + 1);
 			break;
 		case '<':
-			if (!rule.deps.empty())
-				out << rule.deps.front();
+			if (!job.rule.deps.empty())
+				out << job.rule.deps.front();
 			in.seekg(p + 1);
 			break;
 		case '^':
 		{
 			bool first = true;
-			for (string_list::const_iterator i = rule.deps.begin(),
-			     i_end = rule.deps.end(); i != i_end; ++i)
+			for (string_list::const_iterator i = job.rule.deps.begin(),
+			     i_end = job.rule.deps.end(); i != i_end; ++i)
 			{
 				if (first) first = false;
 				else out << ' ';
@@ -2062,19 +2053,19 @@ static std::string prepare_script(rule_t const &rule)
 			break;
 		}
 		case '@':
-			assert(!rule.targets.empty());
-			out << rule.targets.front();
+			assert(!job.rule.targets.empty());
+			out << job.rule.targets.front();
 			in.seekg(p + 1);
 			break;
 		case '*':
-			out << rule.stem;
+			out << job.stem;
 			in.seekg(p + 1);
 			break;
 		case '(':
 		{
 			in.seekg(p - 1);
 			bool first = true;
-			input_generator gen(in, &rule.vars, true);
+			input_generator gen(in, &job.vars, true);
 			while (true)
 			{
 				std::string w;
@@ -2106,13 +2097,13 @@ static std::string prepare_script(rule_t const &rule)
 /**
  * Execute the script from @a rule.
  */
-static status_e run_script(int job_id, rule_t const &rule)
+static status_e run_script(int job_id, job_t const &job)
 {
 	if (show_targets)
 	{
 		std::cout << "Building";
-		for (string_list::const_iterator i = rule.targets.begin(),
-		     i_end = rule.targets.end(); i != i_end; ++i)
+		for (string_list::const_iterator i = job.rule.targets.begin(),
+		     i_end = job.rule.targets.end(); i != i_end; ++i)
 		{
 			std::cout << ' ' << *i;
 		}
@@ -2120,15 +2111,15 @@ static status_e run_script(int job_id, rule_t const &rule)
 	}
 
 	ref_ptr<dependency_t> dep;
-	dep->targets = rule.targets;
-	dep->deps.insert(rule.deps.begin(), rule.deps.end());
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i)
+	dep->targets = job.rule.targets;
+	dep->deps.insert(job.rule.deps.begin(), job.rule.deps.end());
+	for (string_list::const_iterator i = job.rule.targets.begin(),
+	     i_end = job.rule.targets.end(); i != i_end; ++i)
 	{
 		dependencies[*i] = dep;
 	}
 
-	std::string script = prepare_script(rule);
+	std::string script = prepare_script(job);
 
 	std::ostringstream job_id_buf;
 	job_id_buf << job_id;
@@ -2236,33 +2227,44 @@ static status_e run_script(int job_id, rule_t const &rule)
  */
 static status_e start(std::string const &target, client_list::iterator &current)
 {
-	DEBUG_open << "Starting job " << job_counter << " for " << target << "... ";
-	rule_t rule = find_rule(target);
-	if (rule.targets.empty())
+	int job_id = job_counter++;
+	DEBUG_open << "Starting job " << job_id << " for " << target << "... ";
+	job_t &job = jobs[job_id];
+	find_rule(job, target);
+	if (job.rule.targets.empty())
 	{
 		status[target].status = Failed;
 		DEBUG_close << "failed\n";
 		std::cerr << "No rule for building " << target << std::endl;
 		return Failed;
 	}
-	for (string_list::const_iterator i = rule.targets.begin(),
-	     i_end = rule.targets.end(); i != i_end; ++i)
+	for (string_list::const_iterator i = job.rule.targets.begin(),
+	     i_end = job.rule.targets.end(); i != i_end; ++i)
 	{
 		status[*i].status = Running;
 	}
-	int job_id = job_counter++;
-	job_targets[job_id] = rule.targets;
-	if (!rule.deps.empty() || !rule.wdeps.empty())
+	for (assign_map::const_iterator i = job.rule.assigns.begin(),
+	     i_end = job.rule.assigns.end(); i != i_end; ++i)
+	{
+		string_list &v = job.vars[i->first];
+		if (i->second.append)
+		{
+			variable_map::const_iterator j = variables.find(i->first);
+			if (j != variables.end()) v = j->second;
+		}
+		v.insert(v.end(), i->second.value.begin(), i->second.value.end());
+	}
+	if (!job.rule.deps.empty() || !job.rule.wdeps.empty())
 	{
 		current = clients.insert(current, client_t());
 		current->job_id = job_id;
-		current->pending = rule.deps;
+		current->pending = job.rule.deps;
 		current->pending.insert(current->pending.end(),
-			rule.wdeps.begin(), rule.wdeps.end());
-		current->delayed = new rule_t(rule);
+			job.rule.wdeps.begin(), job.rule.wdeps.end());
+		current->delayed = true;
 		return Recheck;
 	}
-	return run_script(job_id, rule);
+	return run_script(job_id, job);
 }
 
 /**
@@ -2277,12 +2279,13 @@ static void complete_request(client_t &client, bool success)
 		assert(client.socket == INVALID_SOCKET);
 		if (success)
 		{
-			if (still_need_rebuild(client.delayed->targets.front()))
-				run_script(client.job_id, *client.delayed);
+			job_map::const_iterator i = jobs.find(client.job_id);
+			assert(i != jobs.end());
+			if (still_need_rebuild(i->second.rule.targets.front()))
+				run_script(client.job_id, i->second);
 			else complete_job(client.job_id, true);
 		}
 		else complete_job(client.job_id, false);
-		delete client.delayed;
 	}
 	else if (client.socket != INVALID_SOCKET)
 	{
@@ -2577,12 +2580,12 @@ static void accept_client()
 	memcpy(&job_id, &buf[0], sizeof(int));
 	proc->socket = fd;
 	proc->job_id = job_id;
-	job_targets_map::const_iterator i = job_targets.find(job_id);
-	if (i == job_targets.end()) goto error;
+	job_map::const_iterator i = jobs.find(job_id);
+	if (i == jobs.end()) goto error;
 	DEBUG << "receiving request from job " << job_id << std::endl;
 
 	// Parse the targets and mark them as dependencies from the job targets.
-	dependency_t &dep = *dependencies[job_targets[job_id].front()];
+	dependency_t &dep = *dependencies[i->second.rule.targets.front()];
 	char const *p = &buf[0] + sizeof(int);
 	while (true)
 	{
