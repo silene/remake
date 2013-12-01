@@ -373,8 +373,8 @@ When building a target, the following sequence of events happens:
 
 - #start calls #find_rule (and #find_generic_rule) to get the rule.
 - It then creates a pseudo-client if the rule has static dependencies, or
-  calls #run_script otherwise. In both cases, a new job is created and its
-  targets are put into #job_targets.
+  calls #run_script otherwise. In both cases, a new job is created; the
+  rule and the variables are stored into #jobs.
 - #run_script creates a shell process and stores it in #job_pids. It
   increases #running_jobs.
 - The child process possibly calls <b>remake</b> with a list of targets.
@@ -392,7 +392,7 @@ When building a target, the following sequence of events happens:
 - When a child process ends, #server_loop calls #finalize_job, which
   removes the process from #job_pids, decreases #running_jobs, and calls
   #complete_job.
-- #complete_job removes the job from #job_targets and calls #update_status
+- #complete_job removes the job from #jobs and calls #update_status
   to change the status of the targets. It also removes the target files in
   case of failure.
 */
@@ -668,7 +668,7 @@ static int waiting_jobs = 0;
 
 /**
  * Global counter used to produce increasing job numbers.
- * @see job_targets
+ * @see jobs
  */
 static int job_counter = 0;
 
