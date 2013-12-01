@@ -720,6 +720,11 @@ static std::string working_dir;
 static std::string prefix_dir;
 
 /**
+ * Whether the prefix directory is different from #working_dir.
+ */
+static bool changed_prefix_dir;
+
+/**
  * Whether target-specific variables are propagated to prerequisites.
  */
 static bool propagate_vars = false;
@@ -870,7 +875,16 @@ static void init_prefix_dir()
 		struct stat s;
 		if (stat((prefix_dir + "/Remakefile").c_str(), &s) == 0)
 		{
-			chdir(prefix_dir.c_str());
+			if (!changed_prefix_dir) return;
+			if (chdir(prefix_dir.c_str()))
+			{
+				perror("Failed to change working directory");
+				exit(EXIT_FAILURE);
+			}
+			if (show_targets)
+			{
+				std::cout << "remake: Entering directory `" << prefix_dir << '\'' << std::endl;
+			}
 			return;
 		}
 		size_t pos = prefix_dir.find_last_of('/');
@@ -880,6 +894,7 @@ static void init_prefix_dir()
 			exit(EXIT_FAILURE);
 		}
 		prefix_dir.erase(pos);
+		changed_prefix_dir = true;
 	}
 }
 
@@ -2786,6 +2801,10 @@ static void server_mode(std::string const &remakefile, string_list const &target
 	free(socket_name);
 #endif
 	save_dependencies();
+	if (show_targets && changed_prefix_dir)
+	{
+		std::cout << "remake: Leaving directory `" << prefix_dir << '\'' << std::endl;
+	}
 	exit(build_failure ? EXIT_FAILURE : EXIT_SUCCESS);
 }
 
@@ -2921,8 +2940,6 @@ static void usage(int exit_status)
  */
 int main(int argc, char *argv[])
 {
-	init_working_dir();
-
 	std::string remakefile;
 	string_list targets;
 	bool literal_targets = false;
@@ -2967,10 +2984,13 @@ int main(int argc, char *argv[])
 				continue;
 			}
 			new_target:
-			targets.push_back(normalize(arg, working_dir, working_dir));
+			targets.push_back(arg);
 			DEBUG << "New target: " << arg << '\n';
 		}
 	}
+
+	init_working_dir();
+	normalize_list(targets, working_dir, working_dir);
 
 	if (indirect_targets)
 	{
