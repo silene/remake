@@ -1,0 +1,9 @@
+remake: remake.cpp
+	g++ -Wall -O2 -W remake.cpp -o remake
+
+check: remake
+	cd testsuite
+	./all.sh
+
+doxydoc: remake.cpp
+	doxygen
