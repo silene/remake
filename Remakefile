@@ -1,5 +1,5 @@
 remake: remake.cpp
-	g++ -Wall -O2 -W remake.cpp -o remake
+	g++ -Wall -O0 -g -W remake.cpp -o remake
 
 check: remake
 	cd testsuite
