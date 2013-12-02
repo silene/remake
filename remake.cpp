@@ -1091,44 +1091,44 @@ static int expect_token(std::istream &in, int mask)
 /**
  * Read a (possibly quoted) word.
  */
-static std::string read_word(std::istream &in)
+static std::string read_word(std::istream &in, bool detect_equal = true)
 {
-	int c = in.get();
+	int c = in.peek();
 	std::string res;
 	if (!in.good()) return res;
-	char const *separators = " \t\r\n:$(),=+\"";
+	char const *separators = " \t\r\n$(),:";
 	bool quoted = c == '"';
-	if (!quoted)
-	{
-		if (strchr(separators, c))
-		{
-			in.putback(c);
-			return res;
-		}
-		res += c;
-	}
+	if (quoted) in.ignore(1);
+	bool plus = false;
 	while (true)
 	{
-		c = in.get();
+		c = in.peek();
 		if (!in.good()) return res;
 		if (quoted)
 		{
+			in.ignore(1);
 			if (c == '\\')
 				res += in.get();
 			else if (c == '"')
-				return res;
+				quoted = false;
 			else
 				res += c;
+			continue;
 		}
-		else
+		if (detect_equal && c == '=')
 		{
-			if (strchr(separators, c))
-			{
-				in.putback(c);
-				return res;
-			}
-			res += c;
+			if (plus) in.putback('+');
+			return res;
 		}
+		if (plus)
+		{
+			res += '+';
+			plus = false;
+		}
+		if (strchr(separators, c)) return res;
+		in.ignore(1);
+		if (detect_equal && c == '+') plus = true;
+		else res += c;
 	}
 }
 
@@ -1233,11 +1233,11 @@ input_status input_generator::next(std::string &res)
 	switch (expect_token(in, Word | Dollarpar))
 	{
 	case Word:
-		res = read_word(in);
+		res = read_word(in, false);
 		return Success;
 	case Dollarpar:
 	{
-		std::string name = read_word(in);
+		std::string name = read_word(in, false);
 		if (name.empty()) return SyntaxError;
 		if (expect_token(in, Rightpar))
 			nested = new variable_generator(name, local_variables);
