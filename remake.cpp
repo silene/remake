@@ -343,7 +343,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.9
+@version 0.10
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify
