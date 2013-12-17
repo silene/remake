@@ -172,6 +172,10 @@ computation of their dynamic dependencies does.
 	parser.c parser.h: parser.y
 		yacc -d -o parser.c parser.y
 
+### Special targets
+
+Target <tt>.PHONY</tt> marks its prerequisites as being always obsolete.
+
 ### Special variables
 
 Variable <tt>.OPTIONS</tt> is handled specially. Its content enables some

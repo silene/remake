@@ -184,6 +184,10 @@ parser.c parser.h: parser.y
 	yacc -d -o parser.c parser.y
 @endverbatim
 
+\subsection sec-special-tgt Special targets
+
+Target <tt>.PHONY</tt> marks its prerequisites as being always obsolete.
+
 \subsection sec-special-var Special variables
 
 Variable <tt>.OPTIONS</tt> is handled specially. Its content enables some
@@ -343,7 +347,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.10
+@version 0.11
 @date 2012-2013
 @copyright
 This program is free software: you can redistribute it and/or modify
@@ -1662,6 +1666,17 @@ static void load_rule(std::istream &in, std::string const &first)
 		}
 	}
 	rule.script = buf.str();
+
+	// Register phony targets.
+	if (rule.targets.front() == ".PHONY")
+	{
+		for (string_list::const_iterator i = rule.deps.begin(),
+		     i_end = rule.deps.end(); i != i_end; ++i)
+		{
+			status[*i].status = Todo;
+		}
+		return;
+	}
 
 	// Add generic rules to the correct set.
 	if (generic)
