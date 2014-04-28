@@ -511,6 +511,7 @@ enum status_e
 	Todo,     ///< Target is missing or obsolete.
 	Recheck,  ///< Target has an obsolete dependency.
 	Running,  ///< Target is being rebuilt.
+	RunningRecheck, ///< Static prerequisites are being rebuilt.
 	Remade,   ///< Target was successfully rebuilt.
 	Failed    ///< Build failed for target.
 };
@@ -776,7 +777,7 @@ struct log
 	}
 };
 
-log debug;
+static log debug;
 
 struct log_auto_close
 {
@@ -2017,10 +2018,10 @@ static void update_status(std::string const &target)
  */
 static bool still_need_rebuild(std::string const &target)
 {
-	DEBUG_open << "Rechecking obsoleteness of " << target << "... ";
 	status_map::const_iterator i = status.find(target);
 	assert(i != status.end());
-	if (i->second.status != Recheck) return true;
+	if (i->second.status != RunningRecheck) return true;
+	DEBUG_open << "Rechecking obsoleteness of " << target << "... ";
 	dependency_map::const_iterator j = dependencies.find(target);
 	assert(j != dependencies.end());
 	dependency_t const &dep = *j->second;
@@ -2301,10 +2302,14 @@ static status_e start(std::string const &target, client_list::iterator &current)
 		std::cerr << "No rule for building " << target << std::endl;
 		return Failed;
 	}
+	bool has_deps = !job.rule.deps.empty() || !job.rule.wdeps.empty();
+	status_e st = Running;
+	if (has_deps && status[target].status == Recheck)
+		st = RunningRecheck;
 	for (string_list::const_iterator i = job.rule.targets.begin(),
 	     i_end = job.rule.targets.end(); i != i_end; ++i)
 	{
-		status[*i].status = Running;
+		status[*i].status = st;
 	}
 	if (propagate_vars) job.vars = current->vars;
 	for (assign_map::const_iterator i = job.rule.assigns.begin(),
@@ -2324,7 +2329,7 @@ static status_e start(std::string const &target, client_list::iterator &current)
 		else if (!k.second) v.clear();
 		v.insert(v.end(), i->second.value.begin(), i->second.value.end());
 	}
-	if (!job.rule.deps.empty() || !job.rule.wdeps.empty())
+	if (has_deps)
 	{
 		current = clients.insert(current, client_t());
 		current->job_id = job_id;
@@ -2333,7 +2338,7 @@ static status_e start(std::string const &target, client_list::iterator &current)
 			job.rule.wdeps.begin(), job.rule.wdeps.end());
 		if (propagate_vars) current->vars = job.vars;
 		current->delayed = true;
-		return Recheck;
+		return RunningRecheck;
 	}
 	return run_script(job_id, job);
 }
@@ -2421,6 +2426,7 @@ static bool handle_clients()
 			switch (k->second.status)
 			{
 			case Running:
+			case RunningRecheck:
 				break;
 			case Failed:
 				i->failed = true;
@@ -2444,6 +2450,7 @@ static bool handle_clients()
 			switch (get_status(target).status)
 			{
 			case Running:
+			case RunningRecheck:
 				i->running.insert(target);
 				break;
 			case Failed:
@@ -2466,7 +2473,7 @@ static bool handle_clients()
 					j->running.insert(target);
 					if (!has_free_slots()) return true;
 					break;
-				case Recheck:
+				case RunningRecheck:
 					// Switch to the dependency client that was inserted.
 					j->running.insert(target);
 					i_next = j;
