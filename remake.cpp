@@ -74,6 +74,7 @@ Usage: <tt>remake <i>options</i> <i>targets</i></tt>
 
 Options:
 
+- <tt>-B</tt>, <tt>--always-make</tt>: Unconditionally make all targets.
 - <tt>-d</tt>: Echo script commands.
 - <tt>-f FILE</tt>: Read <tt>FILE</tt> as <b>Remakefile</b>.
 - <tt>-j[N]</tt>, <tt>--jobs=[N]</tt>: Allow <tt>N</tt> jobs at once;
@@ -733,6 +734,11 @@ static bool changed_prefix_dir;
  * Whether target-specific variables are propagated to prerequisites.
  */
 static bool propagate_vars = false;
+
+/**
+ * Whether targets are unconditionally obsolete.
+ */
+static bool obsolete_targets = false;
 
 #ifndef WINDOWS
 static volatile sig_atomic_t got_SIGCHLD = 0;
@@ -1936,6 +1942,13 @@ static status_t const &get_status(std::string const &target)
 		ts.last = s.st_mtime;
 		return ts;
 	}
+	if (obsolete_targets)
+	{
+		DEBUG_close << "forcefully obsolete\n";
+		ts.status = Todo;
+		ts.last = 0;
+		return ts;
+	}
 	dependency_t const &dep = *j->second;
 	status_e st = Uptodate;
 	time_t latest = 0;
@@ -2938,6 +2951,7 @@ static void usage(int exit_status)
 {
 	std::cerr << "Usage: remake [options] [target] ...\n"
 		"Options\n"
+		"  -B, --always-make      Unconditionally make all targets.\n"
 		"  -d                     Echo script commands.\n"
 		"  -d -d                  Print lots of debugging information.\n"
 		"  -f FILE                Read FILE as Remakefile.\n"
@@ -2983,6 +2997,8 @@ int main(int argc, char *argv[])
 			show_targets = false;
 		else if (arg == "-r")
 			indirect_targets = true;
+		else if (arg == "-B" || arg == "--always-make")
+			obsolete_targets = true;
 		else if (arg == "-f")
 		{
 			if (++i == argc) usage(EXIT_FAILURE);

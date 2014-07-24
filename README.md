@@ -69,6 +69,7 @@ Usage: <tt>remake <i>options</i> <i>targets</i></tt>
 
 Options:
 
+- <tt>-B</tt>, <tt>--always-make</tt>: Unconditionally make all targets.
 - <tt>-d</tt>: Echo script commands.
 - <tt>-f FILE</tt>: Read <tt>FILE</tt> as <b>Remakefile</b>.
 - <tt>-j\[N\]</tt>, <tt>--jobs=\[N\]</tt>: Allow <tt>N</tt> jobs at once;
