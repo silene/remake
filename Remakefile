@@ -7,3 +7,5 @@ check: remake
 
 doxydoc: remake.cpp
 	doxygen
+
+.PHONY: check
