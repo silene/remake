@@ -2089,7 +2089,11 @@ static void complete_job(int job_id, bool success)
 			std::cerr << ' ' << *j;
 			update_status(*j);
 			status_e &s = status[*j].status;
-			if (s != Uptodate) remove(j->c_str());
+			if (s != Uptodate)
+			{
+				DEBUG << "Removing " << *j << '\n';
+				remove(j->c_str());
+			}
 			s = Failed;
 		}
 		std::cerr << std::endl;
