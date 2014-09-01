@@ -2086,9 +2086,11 @@ static void complete_job(int job_id, bool success)
 		for (string_list::const_iterator j = targets.begin(),
 		     j_end = targets.end(); j != j_end; ++j)
 		{
-			status[*j].status = Failed;
 			std::cerr << ' ' << *j;
-			remove(j->c_str());
+			update_status(*j);
+			status_e &s = status[*j].status;
+			if (s != Uptodate) remove(j->c_str());
+			s = Failed;
 		}
 		std::cerr << std::endl;
 	}
