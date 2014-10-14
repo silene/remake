@@ -2063,7 +2063,7 @@ static bool still_need_rebuild(std::string const &target)
 /**
  * Handle job completion.
  */
-static void complete_job(int job_id, bool success)
+static void complete_job(int job_id, bool success, bool started = true)
 {
 	DEBUG << "Completing job " << job_id << '\n';
 	job_map::iterator i = jobs.find(job_id);
@@ -2071,14 +2071,15 @@ static void complete_job(int job_id, bool success)
 	string_list const &targets = i->second.rule.targets;
 	if (success)
 	{
-		if (show_targets) std::cout << "Finished";
+		bool show = show_targets && started;
+		if (show) std::cout << "Finished";
 		for (string_list::const_iterator j = targets.begin(),
 		     j_end = targets.end(); j != j_end; ++j)
 		{
 			update_status(*j);
-			if (show_targets) std::cout << ' ' << *j;
+			if (show) std::cout << ' ' << *j;
 		}
-		if (show_targets) std::cout << std::endl;
+		if (show) std::cout << std::endl;
 	}
 	else
 	{
@@ -2378,7 +2379,7 @@ static void complete_request(client_t &client, bool success)
 			assert(i != jobs.end());
 			if (still_need_rebuild(i->second.rule.targets.front()))
 				run_script(client.job_id, i->second);
-			else complete_job(client.job_id, true);
+			else complete_job(client.job_id, true, false);
 		}
 		else complete_job(client.job_id, false);
 	}
