@@ -1,3 +1,4 @@
+/* -*- mode: C++; indent-tabs-mode: t; c-basic-offset: 8; -*- */
 /**
 @mainpage Remake, a build system that bridges the gap between make and redo.
 
@@ -255,10 +256,10 @@ rebuild the target.
 
 Otherwise, it looks for a generic rule that matches the target. If there are
 several matching rules, it chooses the one with the shortest pattern (and if
-there are several ones, the earliest one). <b>remake</b> then looks for
-specific rules that match each target of the generic rule. All the
-prerequisites of these specific rules are added to those of the generic rule.
-The script of the generic rule is used to build the target.
+there are several ones, the earliest one). It then looks for specific rules
+that match each target of the generic rule. All the prerequisites of these
+specific rules are added to those of the generic rule. The script of the
+generic rule is used to build the target.
 
 Example:
 
@@ -304,9 +305,9 @@ Differences with <b>make</b>:
   rather than one per script line. Note that the shells are run with
   option <tt>-e</tt>, thus causing them to exit as soon as an error is
   encountered.
-- The prerequisites of generic rules (known as implicit rules in make lingo)
-  are not used to decide between several of them. <b>remake</b> does not
-  select one for which it could satisfy the dependencies.
+- The prerequisites of generic rules (known as implicit rules in <b>make</b>
+  lingo) are not used to decide between several of them, which means that
+  <b>remake</b> does not select one for which it could satisfy the dependencies.
 - Variables and built-in functions are expanded as they are encountered
   during <b>Remakefile</b> parsing.
 - Target-specific variables are not propagated, unless specifically enabled,
@@ -2421,8 +2422,8 @@ static bool has_free_slots()
  * @invariant New free slots cannot appear during a run, since the only way to
  *            decrease #running_jobs is #finalize_job and the only way to
  *            increase #waiting_jobs is #accept_client. None of these functions
- *            are called during a run. So breaking out as soon as there no free
- *            slots left is fine.
+ *            are called during a run. So breaking out as soon as there are no
+ *            free slots left is fine.
  */
 static bool handle_clients()
 {
@@ -2431,8 +2432,9 @@ static bool handle_clients()
 	bool need_restart = false;
 
 	for (client_list::iterator i = clients.begin(), i_next = i,
-	     i_end = clients.end(); i != i_end && has_free_slots(); i = i_next)
+	     i_end = clients.end(); i != i_end; i = i_next)
 	{
+		if (!has_free_slots()) break;
 		++i_next;
 		DEBUG_open << "Handling client from job " << i->job_id << "... ";
 

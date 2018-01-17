@@ -242,10 +242,10 @@ rebuild the target.
 
 Otherwise, it looks for a generic rule that matches the target. If there are
 several matching rules, it chooses the one with the shortest pattern (and if
-there are several ones, the earliest one). <b>remake</b> then looks for
-specific rules that match each target of the generic rule. All the
-prerequisites of these specific rules are added to those of the generic rule.
-The script of the generic rule is used to build the target.
+there are several ones, the earliest one). It then looks for specific rules
+that match each target of the generic rule. All the prerequisites of these
+specific rules are added to those of the generic rule. The script of the
+generic rule is used to build the target.
 
 Example:
 
@@ -291,9 +291,9 @@ Differences with <b>make</b>:
   rather than one per script line. Note that the shells are run with
   option <tt>-e</tt>, thus causing them to exit as soon as an error is
   encountered.
-- The prerequisites of generic rules (known as implicit rules in make lingo)
-  are not used to decide between several of them. <b>remake</b> does not
-  select one for which it could satisfy the dependencies.
+- The prerequisites of generic rules (known as implicit rules in <b>make</b>
+  lingo) are not used to decide between several of them, which means that
+  <b>remake</b> does not select one for which it could satisfy the dependencies.
 - Variables and built-in functions are expanded as they are encountered
   during <b>Remakefile</b> parsing.
 - Target-specific variables are not propagated, unless specifically enabled,
@@ -337,7 +337,7 @@ See <http://cr.yp.to/redo.html> for the philosophy of <b>redo</b> and
 Licensing
 ---------
 
-Copyright (C) 2012-2013 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
+Copyright (C) 2012-2014 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
