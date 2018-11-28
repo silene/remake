@@ -2456,7 +2456,7 @@ static bool handle_clients()
 			case Failed:
 				i->failed = true;
 				if (!keep_going) goto complete;
-				// no break
+				// fallthrough
 			case Uptodate:
 			case Remade:
 				i->running.erase(j);
@@ -2482,7 +2482,7 @@ static bool handle_clients()
 				pending_failed:
 				i->failed = true;
 				if (!keep_going) goto complete;
-				// no break
+				// fallthrough
 			case Uptodate:
 			case Remade:
 				break;
