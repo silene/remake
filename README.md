@@ -337,7 +337,7 @@ See <http://cr.yp.to/redo.html> for the philosophy of <b>redo</b> and
 Licensing
 ---------
 
-Copyright (C) 2012-2014 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
+Copyright (C) 2012-2018 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
