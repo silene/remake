@@ -742,6 +742,8 @@ static bool propagate_vars = false;
 static bool obsolete_targets = false;
 
 #ifndef WINDOWS
+static sigset_t old_sigmask;
+
 static volatile sig_atomic_t got_SIGCHLD = 0;
 
 static void sigchld_handler(int)
@@ -2298,6 +2300,7 @@ static status_e run_script(int job_id, job_t const &job)
 		dup2(pfd[0], 0);
 		close(pfd[0]);
 	}
+	sigprocmask(SIG_SETMASK, &old_sigmask, NULL);
 	execve("/bin/sh", (char **)argv, environ);
 	_exit(EXIT_FAILURE);
 #endif
@@ -2582,7 +2585,7 @@ static void create_server()
 	sigset_t sigmask;
 	sigemptyset(&sigmask);
 	sigaddset(&sigmask, SIGCHLD);
-	if (sigprocmask(SIG_BLOCK, &sigmask, NULL) == -1) goto error;
+	if (sigprocmask(SIG_BLOCK, &sigmask, &old_sigmask) == -1) goto error;
 	struct sigaction sa;
 	sa.sa_flags = 0;
 	sigemptyset(&sa.sa_mask);
