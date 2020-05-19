@@ -102,7 +102,7 @@ follows:
 		shell script
 
 List of names are space-separated sequences of names. If a name contains
-a space character, it should be put into double quotes. Names can not be
+a space character, it should be put into double quotes. Names cannot be
 any of the following special characters `:$(),="`. Again, quotation
 should be used. Quotation marks can be escaped by a backslash inside
 quoted names.
@@ -172,6 +172,18 @@ computation of their dynamic dependencies does.
 
 	parser.c parser.h: parser.y
 		yacc -d -o parser.c parser.y
+
+### Static pattern rules
+
+A rule with the following structure is expanded into several rules, one
+per target.
+
+    targets: pattern1 pattern2 ...: prerequisites
+
+Every target is matched against one of the patterns containing the `%`
+character. A rule is then created using the patterns as targets, after
+having substituted `%` in the patterns and prerequisites. The automatic
+variable `$*` can be used in the script of the rule.
 
 ### Special targets
 
@@ -337,7 +349,7 @@ See <http://cr.yp.to/redo.html> for the philosophy of <b>redo</b> and
 Licensing
 ---------
 
-Copyright (C) 2012-2018 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
+Copyright (C) 2012-2020 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by

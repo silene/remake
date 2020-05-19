@@ -109,7 +109,7 @@ targets : prerequisites
 @endverbatim
 
 List of names are space-separated sequences of names. If a name contains
-a space character, it should be put into double quotes. Names can not be
+a space character, it should be put into double quotes. Names cannot be
 any of the following special characters `:$(),="`. Again, quotation
 should be used. Quotation marks can be escaped by a backslash inside
 quoted names.
@@ -185,6 +185,20 @@ computation of their dynamic dependencies does.
 parser.c parser.h: parser.y
 	yacc -d -o parser.c parser.y
 @endverbatim
+
+\subsection sec-static-pattern Static pattern rules
+
+A rule with the following structure is expanded into several rules, one
+per target.
+
+@verbatim
+targets: pattern1 pattern2 ...: prerequisites
+@endverbatim
+
+Every target is matched against one of the patterns containing the `%`
+character. A rule is then created using the patterns as targets, after
+having substituted `%` in the patterns and prerequisites. The automatic
+variable `$*` can be used in the script of the rule.
 
 \subsection sec-special-tgt Special targets
 
@@ -349,8 +363,8 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.13
-@date 2012-2018
+@version 0.14
+@date 2012-2020
 @copyright
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -549,6 +563,7 @@ struct rule_t
 	string_list deps;    ///< Dependencies used for an implicit call to remake at the start of the script.
 	string_list wdeps;   ///< Like #deps, except that they are not registered as dependencies.
 	assign_map assigns;  ///< Assignment of variables.
+	std::string stem;    ///< Stem used to instantiate the rule, if any.
 	std::string script;  ///< Shell script for building the targets.
 };
 
@@ -563,7 +578,6 @@ typedef std::map<std::string, ref_ptr<rule_t> > rule_map;
 struct job_t
 {
 	rule_t rule;       ///< Original rule.
-	std::string stem;  ///< Pattern used to instantiate the generic rule, if any.
 	variable_map vars; ///< Values of local variables.
 };
 
@@ -1498,6 +1512,7 @@ static void save_dependencies()
 /** @} */
 
 static void merge_rule(rule_t &dest, rule_t const &src);
+static void instantiate_rule(std::string const &target, rule_t const &src, rule_t &dst);
 
 /**
  * @defgroup parser Rule parser
@@ -1583,6 +1598,30 @@ static void register_scripted_rule(rule_t const &rule)
 }
 
 /**
+ * Register a specific rule.
+ */
+static void register_rule(rule_t const &rule)
+{
+	if (!rule.script.empty())
+	{
+		register_scripted_rule(rule);
+	}
+	else
+	{
+		// Swap away the targets to avoid costly copies when registering.
+		rule_t &r = const_cast<rule_t &>(rule);
+		string_list targets;
+		targets.swap(r.targets);
+		register_transparent_rule(r, targets);
+		targets.swap(r.targets);
+	}
+
+	// If there is no default target yet, mark it as such.
+	if (first_target.empty())
+		first_target = rule.targets.front();
+}
+
+/**
  * Read a rule starting with target @a first, if nonempty.
  * Store into #generic_rules or #specific_rules depending on its genericity.
  */
@@ -1596,7 +1635,6 @@ static void load_rule(std::istream &in, std::string const &first)
 		std::cerr << "Failed to load rules: syntax error" << std::endl;
 		exit(EXIT_FAILURE);
 	}
-	rule_t rule;
 
 	// Read targets and check genericity.
 	string_list targets;
@@ -1616,11 +1654,13 @@ static void load_rule(std::istream &in, std::string const &first)
 			else goto error;
 		}
 	}
-	std::swap(rule.targets, targets);
 	skip_spaces(in);
 	if (in.get() != ':') goto error;
 
-	bool assignment = false;
+	bool assignment = false, static_pattern = false;
+
+	rule_t rule;
+	rule.targets.swap(targets);
 
 	// Read dependencies.
 	{
@@ -1643,6 +1683,23 @@ static void load_rule(std::istream &in, std::string const &first)
 		if (!read_words(in, v)) goto error;
 		normalize_list(v, "", "");
 		rule.deps.swap(v);
+
+		if (expect_token(in, Colon))
+		{
+			if (!read_words(in, v)) goto error;
+			normalize_list(v, "", "");
+			targets.swap(rule.targets);
+			rule.targets.swap(rule.deps);
+			rule.deps.swap(v);
+			if (rule.targets.empty()) goto error;
+			for (string_list::const_iterator i = rule.targets.begin(),
+			     i_end = rule.targets.end(); i != i_end; ++i)
+			{
+				if (i->find('%') == std::string::npos) goto error;
+			}
+			generic = false;
+			static_pattern = true;
+		}
 
 		if (expect_token(in, Pipe))
 		{
@@ -1696,23 +1753,20 @@ static void load_rule(std::istream &in, std::string const &first)
 		return;
 	}
 
-	if (!rule.script.empty())
+	if (!static_pattern)
 	{
-		if (assignment) goto error;
-		register_scripted_rule(rule);
-	}
-	else
-	{
-		// Swap away the targets to avoid costly copies when registering.
-		string_list targets;
-		std::swap(rule.targets, targets);
-		register_transparent_rule(rule, targets);
-		std::swap(rule.targets, targets);
+		if (!rule.script.empty() && assignment) goto error;
+		register_rule(rule);
+		return;
 	}
 
-	// If there is no default target yet, mark it as such.
-	if (first_target.empty())
-		first_target = rule.targets.front();
+	for (string_list::const_iterator i = targets.begin(),
+	     i_end = targets.end(); i != i_end; ++i)
+	{
+		rule_t r;
+		instantiate_rule(*i, rule, r);
+		if (!r.stem.empty()) register_rule(r);
+	}
 }
 
 /**
@@ -1826,37 +1880,47 @@ static void substitute_pattern(std::string const &pat, string_list const &src, s
 }
 
 /**
+ * Instantiate a specific rule, given a target and a generic rule.
+ * If the rule @a dst already contains a stem longer than the one found,
+ * it is left unchanged.
+ */
+static void instantiate_rule(std::string const &target, rule_t const &src, rule_t &dst)
+{
+	size_t tlen = target.length(), plen = dst.stem.length();
+	for (string_list::const_iterator j = src.targets.begin(),
+	     j_end = src.targets.end(); j != j_end; ++j)
+	{
+		size_t len = j->length();
+		if (tlen < len) continue;
+		if (plen && plen <= tlen - (len - 1)) continue;
+		size_t pos = j->find('%');
+		if (pos == std::string::npos) continue;
+		size_t len2 = len - (pos + 1);
+		if (j->compare(0, pos, target, 0, pos) ||
+		    j->compare(pos + 1, len2, target, tlen - len2, len2))
+			continue;
+		plen = tlen - (len - 1);
+		dst = rule_t();
+		dst.stem = target.substr(pos, plen);
+		dst.script = src.script;
+		substitute_pattern(dst.stem, src.targets, dst.targets);
+		substitute_pattern(dst.stem, src.deps, dst.deps);
+		substitute_pattern(dst.stem, src.wdeps, dst.wdeps);
+		break;
+	}
+}
+
+/**
  * Find a generic rule matching @a target:
  * - the one leading to shorter matches has priority,
  * - among equivalent rules, the earliest one has priority.
  */
 static void find_generic_rule(job_t &job, std::string const &target)
 {
-	size_t tlen = target.length(), plen = tlen + 1;
 	for (rule_list::const_iterator i = generic_rules.begin(),
 	     i_end = generic_rules.end(); i != i_end; ++i)
 	{
-		for (string_list::const_iterator j = i->targets.begin(),
-		     j_end = i->targets.end(); j != j_end; ++j)
-		{
-			size_t len = j->length();
-			if (tlen < len) continue;
-			if (plen <= tlen - (len - 1)) continue;
-			size_t pos = j->find('%');
-			if (pos == std::string::npos) continue;
-			size_t len2 = len - (pos + 1);
-			if (j->compare(0, pos, target, 0, pos) ||
-			    j->compare(pos + 1, len2, target, tlen - len2, len2))
-				continue;
-			plen = tlen - (len - 1);
-			job.stem = target.substr(pos, plen);
-			job.rule = rule_t();
-			job.rule.script = i->script;
-			substitute_pattern(job.stem, i->targets, job.rule.targets);
-			substitute_pattern(job.stem, i->deps, job.rule.deps);
-			substitute_pattern(job.stem, i->wdeps, job.rule.wdeps);
-			break;
-		}
+		instantiate_rule(target, *i, job.rule);
 	}
 }
 
@@ -2152,7 +2216,7 @@ static std::string prepare_script(job_t const &job)
 			in.seekg(p + 1);
 			break;
 		case '*':
-			out << job.stem;
+			out << job.rule.stem;
 			in.seekg(p + 1);
 			break;
 		case '(':
