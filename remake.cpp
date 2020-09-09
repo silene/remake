@@ -800,7 +800,7 @@ struct log
 	}
 };
 
-static log debug;
+static struct log debug;
 
 struct log_auto_close
 {
