@@ -363,7 +363,7 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.14
+@version 0.15
 @date 2012-2020
 @copyright
 This program is free software: you can redistribute it and/or modify
@@ -464,7 +464,7 @@ enum { INVALID_SOCKET = -1 };
 extern char **environ;
 #endif
 
-#if defined(WINDOWS) || defined(MACOSX)
+#if (defined(WINDOWS) || defined(MACOSX)) && !defined(MSG_NOSIGNAL)
 enum { MSG_NOSIGNAL = 0 };
 #endif
 
