@@ -211,9 +211,8 @@ features of <b>remake</b> that are not enabled by default.
 
 - `variable-propagation`: When a variable is set in the prerequisite
   part of a rule, it is propagated to the rules of all the targets this rule
-  depends on. This option also enables variables to be set on the command
-  line. Note that, as in <b>make</b>, this features introduces non-determinism:
-  the content of some variables will depend on the build order.
+  depends on. Note that, as in <b>make</b>, this feature introduces
+  non-determinism: the content of some variables will depend on the build order.
 
 \section sec-semantics Semantics
 
@@ -325,8 +324,7 @@ Differences with <b>make</b>:
 - Variables and built-in functions are expanded as they are encountered
   during <b>Remakefile</b> parsing.
 - Target-specific variables are not propagated, unless specifically enabled,
-  since this causes non-deterministic builds. This is the same for variables
-  set on the command line.
+  since this causes non-deterministic builds.
 
 Differences with <b>redo</b>:
 
@@ -363,8 +361,8 @@ https://github.com/apenwarr/redo for an implementation and some comprehensive do
 \section sec-licensing Licensing
 
 @author Guillaume Melquiond
-@version 0.15
-@date 2012-2020
+@version 0.16
+@date 2012-2024
 @copyright
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -2885,6 +2883,7 @@ static void server_loop()
  */
 static void server_mode(std::string const &remakefile, string_list const &targets)
 {
+	variable_map cmdline_variables = variables;
 	load_dependencies();
 	load_rules(remakefile);
 	create_server();
@@ -2894,7 +2893,7 @@ static void server_mode(std::string const &remakefile, string_list const &target
 		clients.back().pending.push_back(remakefile);
 		server_loop();
 		if (build_failure) goto early_exit;
-		variables.clear();
+		variables = cmdline_variables;
 		specific_rules.clear();
 		generic_rules.clear();
 		first_target.clear();

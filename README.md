@@ -196,9 +196,8 @@ features of <b>remake</b> that are not enabled by default.
 
 - `variable-propagation`: When a variable is set in the prerequisite
   part of a rule, it is propagated to the rules of all the targets this rule
-  depends on. This option also enables variables to be set on the command
-  line. Note that, as in <b>make</b>, this features introduces non-determinism:
-  the content of some variables will depend on the build order.
+  depends on. Note that, as in <b>make</b>, this feature introduces
+  non-determinism: the content of some variables will depend on the build order.
 
 Semantics
 ---------
@@ -309,8 +308,7 @@ Differences with <b>make</b>:
 - Variables and built-in functions are expanded as they are encountered
   during <b>Remakefile</b> parsing.
 - Target-specific variables are not propagated, unless specifically enabled,
-  since this causes non-deterministic builds. This is the same for variables
-  set on the command line.
+  since this causes non-deterministic builds.
 
 Differences with <b>redo</b>:
 
@@ -349,7 +347,7 @@ See <http://cr.yp.to/redo.html> for the philosophy of <b>redo</b> and
 Licensing
 ---------
 
-Copyright (C) 2012-2020 by Guillaume Melquiond <guillaume.melquiond@gmail.com>
+Copyright (C) 2012-2024 Guillaume Melquiond
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
