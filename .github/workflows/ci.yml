@@ -14,3 +14,21 @@ jobs:
       run: g++ -Wall -W -O2 remake.cpp -o remake
     - name: test
       run: ./remake check
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: build
+      run: clang++ -Wall -W -O2 remake.cpp -o remake
+    - name: test
+      run: |
+        cd testsuite
+        ./all.sh t001.sh t002.sh t003.sh t004.sh t005.sh t006.sh t007.sh t008.sh t010.sh t011.sh t014.sh t015.sh
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: build
+      run: g++ -Wall -W -O2 remake.cpp -o remake.exe -lws2_32
