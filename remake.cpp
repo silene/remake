@@ -435,7 +435,68 @@ When building a target, the following sequence of events happens:
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <unistd.h>
+#ifdef WINDOWS
+	#ifndef NOMINMAX
+		#define NOMINMAX
+	#endif
+	#include <windows.h>
+	#include <io.h>
+	#include <stdio.h> // for _fseeki64
+	
+/* This is intended as a drop-in replacement for unistd.h on Windows.
+ * Please add functionality as needed.
+ * https://stackoverflow.com/a/826027/1202830
+ */
+
+#include <stdlib.h>
+//#include <getopt.h> /* getopt at: https://gist.github.com/ashelly/7776712 */
+#include <process.h> /* for getpid() and the exec..() family */
+#include <direct.h> /* for _getcwd() and _chdir() */
+
+#define srandom srand
+#define random rand
+
+/* Values for the second argument to access.
+   These may be OR'd together.  */
+#define R_OK    4       /* Test for read permission.  */
+#define W_OK    2       /* Test for write permission.  */
+//#define   X_OK    1       /* execute permission - unsupported in windows*/
+#define F_OK    0       /* Test for existence.  */
+
+#define access _access
+#define dup2 _dup2
+#define execve _execve
+#define ftruncate _chsize
+#define unlink _unlink
+#define fileno _fileno
+#define getcwd _getcwd
+#define chdir _chdir
+#define isatty _isatty
+#define lseek _lseek
+/* read, write, and close are NOT being #defined here, because while there are file handle specific versions for Windows, they probably don't work for sockets. You need to look at your app and consider whether to call e.g. closesocket(). */
+
+#ifdef _WIN64
+#define ssize_t __int64
+#else
+#define ssize_t long
+#endif
+
+#define STDIN_FILENO 0
+#define STDOUT_FILENO 1
+#define STDERR_FILENO 2
+/* should be in some equivalent to <sys/types.h> */
+//typedef __int8            int8_t;
+typedef __int16           int16_t; 
+typedef __int32           int32_t;
+typedef __int64           int64_t;
+typedef unsigned __int8   uint8_t;
+typedef unsigned __int16  uint16_t;
+typedef unsigned __int32  uint32_t;
+typedef unsigned __int64  uint64_t;
+
+#else
+	#include <unistd.h>
+#endif
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -2815,6 +2876,11 @@ static void finalize_job(pid_t pid, bool res)
 	complete_job(job_id, res);
 }
 
+#ifdef _MSC_VER
+	#ifndef MAX_JOB_PIDS_SZ
+	#define MAX_JOB_PIDS_SZ 300
+	#endif//MAX_JOB_PIDS_SZ
+#endif//_MSC_VER
 /**
  * Loop until all the jobs have finished.
  *
@@ -2827,8 +2893,20 @@ static void server_loop()
 		DEBUG_open << "Handling events... ";
 	#ifdef WINDOWS
 		size_t len = job_pids.size() + 1;
+		#ifdef _MSC_VER
+		HANDLE h[MAX_JOB_PIDS_SZ];
+		#else//MinGW supports VLAs
 		HANDLE h[len];
+		#endif//_MSC_VER
 		int num = 0;
+		#ifdef _MSC_VER
+		if(len > MAX_JOB_PIDS_SZ) {
+			fprintf(stderr,"ERROR, we are compiled with MAX_JOB_PIDS_SZ = %d "
+				"but yet job_pids.size() was %zu on %s:%ld\n",
+				MAX_JOB_PIDS_SZ,len-1,__FILE__,__LINE__);
+			exit(-1);
+		}
+		#endif//_MSC_VER
 		for (pid_job_map::const_iterator i = job_pids.begin(),
 		     i_end = job_pids.end(); i != i_end; ++i, ++num)
 		{
