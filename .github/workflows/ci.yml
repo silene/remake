@@ -1,0 +1,16 @@
+name: Github CI
+on: [ push, pull_request ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: prepare
+      run: |
+        sudo apt-get update
+        sudo apt-get install inotify-tools
+    - name: build
+      run: g++ -Wall -W -O2 remake.cpp -o remake
+    - name: test
+      run: ./remake check
