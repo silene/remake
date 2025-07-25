@@ -15,7 +15,7 @@ EOF
 
 $REMAKE
 
-cmp all <<EOF
+cmp all - <<EOF
 esu
 est
 isu
