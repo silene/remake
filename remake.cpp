@@ -435,7 +435,6 @@ When building a target, the following sequence of events happens:
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
@@ -460,6 +459,14 @@ typedef SOCKET socket_t;
 typedef int socket_t;
 enum { INVALID_SOCKET = -1 };
 extern char **environ;
+#endif
+
+#ifdef _MSC_VER
+#include <direct.h>
+#include <io.h>
+#define ssize_t ptrdiff_t
+#else
+#include <unistd.h>
 #endif
 
 #if (defined(WINDOWS) || defined(MACOSX)) && !defined(MSG_NOSIGNAL)
@@ -2827,17 +2834,18 @@ static void server_loop()
 		DEBUG_open << "Handling events... ";
 	#ifdef WINDOWS
 		size_t len = job_pids.size() + 1;
-		HANDLE h[len];
-		int num = 0;
+		std::vector<HANDLE> h;
+		h.reserve(len);
 		for (pid_job_map::const_iterator i = job_pids.begin(),
-		     i_end = job_pids.end(); i != i_end; ++i, ++num)
+		     i_end = job_pids.end(); i != i_end; ++i)
 		{
-			h[num] = i->first;
+			h.push_back(i->first);
 		}
 		WSAEVENT aev = WSACreateEvent();
-		h[num] = aev;
+		h.push_back(aev);
 		WSAEventSelect(socket_fd, aev, FD_ACCEPT);
-		DWORD w = WaitForMultipleObjects(len, h, false, INFINITE);
+		assert(len == h.size());
+		DWORD w = WaitForMultipleObjects(len, &h[0], false, INFINITE);
 		WSAEventSelect(socket_fd, aev, 0);
 		WSACloseEvent(aev);
 		if (len <= w)
