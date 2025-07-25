@@ -435,7 +435,7 @@ When building a target, the following sequence of events happens:
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
-#ifdef WINDOWS
+#ifdef _MSC_VER  //Does MinGW really have unistd.h??????
 	#ifndef NOMINMAX
 		#define NOMINMAX
 	#endif
